@@ -434,6 +434,9 @@ function identityFromInit(options: InitOptions): Identity | null {
     return null;
 }
 
+// Reference: Amplitude keeps identity/session assignment as an explicit SDK
+// operation instead of inferring it from event payloads.
+// https://github.com/amplitude/Amplitude-TypeScript/blob/main/packages/analytics-core/src/core-client.ts
 function normalizeIdentity(identity: Identity): Identity {
     const userId = text(identity.userId);
     const sessionId = text(identity.sessionId);
@@ -445,6 +448,9 @@ function normalizeIdentity(identity: Identity): Identity {
     return { userId, sessionId };
 }
 
+// Reference: mature analytics SDKs normalize a small context object before
+// payload shaping, keeping transport payload generation predictable.
+// https://github.com/amplitude/Amplitude-TypeScript/blob/main/packages/analytics-core/src/core-client.ts
 function cleanContext(context: EventContext): EventContext {
     return {
         channel: text(context.channel) ?? null,
@@ -473,6 +479,9 @@ function cleanContext(context: EventContext): EventContext {
     };
 }
 
+// Reference: validator.js isURL shows URL validation has many edge cases; this
+// MVP intentionally accepts only absolute http(s) URLs through the platform URL API.
+// https://github.com/validatorjs/validator.js/blob/master/src/lib/isURL.js
 function endpoint(value: string | null | undefined): string {
     const candidate = text(value) ?? DEFAULT_ENDPOINT;
 
@@ -487,6 +496,9 @@ function endpoint(value: string | null | undefined): string {
     }
 }
 
+// Reference: PostHog autocapture extracts only allowlisted DOM metadata and
+// avoids sensitive form values by default.
+// https://github.com/PostHog/posthog-js/blob/main/packages/browser/src/autocapture.ts
 function fieldsFromElement(element: Element): TrackFields {
     const fields: Record<string, unknown> = {};
 
@@ -508,11 +520,17 @@ function fieldsFromElement(element: Element): TrackFields {
     return fields as TrackFields;
 }
 
+// Reference: PostHog autocapture walks from the event target to a matching
+// element rather than registering handlers on every candidate node.
+// https://github.com/PostHog/posthog-js/blob/main/packages/browser/src/autocapture.ts
 function closestEventElement(target: EventTarget | null): Element | null {
     const element = isElement(target) ? target : null;
     return element?.closest(DOM_SELECTOR) ?? null;
 }
 
+// Reference: PostHog autocapture maps browser event types from element shape
+// and treats form/select controls differently from click-only elements.
+// https://github.com/PostHog/posthog-js/blob/main/packages/browser/src/autocapture.ts
 function domListenEvent(element: Element): string {
     const explicit = attr(element, "data-loopad-listen");
     if (explicit) return explicit;
@@ -526,11 +544,12 @@ function domListenEvent(element: Element): string {
     return "click";
 }
 
+// Reference: PostHog autocapture keeps an explicit list of safe element
+// attributes/properties instead of serializing arbitrary DOM state.
+// https://github.com/PostHog/posthog-js/blob/main/packages/browser/src/autocapture.ts
 function domProperties(element: Element): EventProperties {
     const properties: EventProperties = {};
 
-    // PostHog autocapture uses allowlisted attributes instead of form values.
-    // We keep the same privacy shape with explicit data-loopad-prop-* only.
     for (const attributeName of attributeNames(element)) {
         if (!attributeName.startsWith("data-loopad-prop-")) {
             continue;
@@ -550,9 +569,10 @@ function domProperties(element: Element): EventProperties {
     return properties;
 }
 
+// Reference: PostHog autocapture has old-browser DOM guards around element
+// metadata collection; this mirrors the modern API + fallback shape.
+// https://github.com/PostHog/posthog-js/blob/main/packages/browser/src/autocapture.ts
 function attributeNames(element: Element): string[] {
-    // Mature browser SDKs carry old-browser fallbacks around DOM utilities.
-    // getAttributeNames() is modern; attributes is the safe fallback.
     if (typeof element.getAttributeNames === "function") {
         return element.getAttributeNames();
     }
@@ -560,9 +580,10 @@ function attributeNames(element: Element): string[] {
     return Array.from(element.attributes ?? []).map((attribute) => attribute.name);
 }
 
+// Reference: PostHog autocapture is conservative around text capture because
+// visible text can contain sensitive user data.
+// https://github.com/PostHog/posthog-js/blob/main/packages/browser/src/autocapture.ts
 function collectText(element: Element): string | undefined {
-    // Autocapture SDKs avoid arbitrary visible text by default. Loop Ad only
-    // collects text when the integrator explicitly opts in on the element.
     const label = attr(element, "data-loopad-label");
     const textValue =
         label ??
@@ -573,6 +594,9 @@ function collectText(element: Element): string | undefined {
     return textValue ? truncateUtf8(textValue, TEXT_LIMIT_BYTES) : undefined;
 }
 
+// Reference: PostHog autocapture records a small element description rather
+// than serializing DOM nodes directly.
+// https://github.com/PostHog/posthog-js/blob/main/packages/browser/src/autocapture.ts
 function elementProperties(element: Element): { [key: string]: EventPropertyValue } {
     const elementInfo: { [key: string]: EventPropertyValue } = {
         tag: element.tagName.toLowerCase()
@@ -590,6 +614,9 @@ function elementProperties(element: Element): { [key: string]: EventPropertyValu
     return elementInfo;
 }
 
+// Reference: PostHog and Amplitude both attach page/location metadata to page
+// events instead of requiring integrators to pass it manually.
+// https://github.com/PostHog/posthog-js/blob/main/packages/browser/src/autocapture.ts
 function page(previousUrl?: string): EventProperties {
     return {
         url: href(),
@@ -604,9 +631,10 @@ function href(): string {
     return typeof location === "undefined" ? "" : location.href;
 }
 
+// Reference: Amplitude event construction accepts caller event options while
+// still normalizing SDK-generated timestamps.
+// https://github.com/amplitude/Amplitude-TypeScript/blob/main/packages/analytics-core/src/core-client.ts
 function eventTime(value: TrackFields["eventTime"]): string {
-    // Accept Date, epoch millis, or caller-provided ISO-ish strings, mirroring
-    // common analytics SDK input leniency while normalizing generated values.
     if (value instanceof Date && Number.isFinite(value.getTime())) {
         return value.toISOString();
     }
@@ -619,6 +647,9 @@ function eventTime(value: TrackFields["eventTime"]): string {
     return stringValue ?? new Date().toISOString();
 }
 
+// Reference: accounting.js trims/coerces human input before number handling;
+// this helper keeps SDK fields empty-string safe before payload shaping.
+// https://github.com/openexchangerates/accounting.js/blob/master/accounting.js
 function text(value: unknown): string | undefined {
     if (value === null || value === undefined) {
         return undefined;
@@ -628,20 +659,32 @@ function text(value: unknown): string | undefined {
     return normalized || undefined;
 }
 
+// Reference: currency.js handles money as precision-normalized finite numbers;
+// the SDK keeps ClickHouse price/revenue values numeric and rounded to cents.
+// https://github.com/scurker/currency.js/blob/main/src/currency.js
 function money(value: unknown): number {
     const normalized = numberOrZero(value);
     return Math.round(normalized * 100) / 100;
 }
 
+// Reference: accounting.js/currency.js both avoid leaking NaN/Infinity into
+// formatted money output; quantity uses the same finite-number guard path.
+// https://github.com/openexchangerates/accounting.js/blob/master/accounting.js
 function quantity(value: unknown): number {
     return Math.max(0, Math.trunc(numberOrZero(value)));
 }
 
+// Reference: accounting.js normalizes bad numeric input to a safe fallback in
+// its unformat/toFixed path; this keeps payload fields ClickHouse-friendly.
+// https://github.com/openexchangerates/accounting.js/blob/master/accounting.js
 function numberOrZero(value: unknown): number {
     const normalized = numberOrNull(value);
     return normalized ?? 0;
 }
 
+// Reference: currency.js first parses external values and rejects invalid
+// numbers before precision handling; this helper is the SDK's numeric gate.
+// https://github.com/scurker/currency.js/blob/main/src/currency.js
 function numberOrNull(value: unknown): number | null {
     if (value === null || value === undefined || value === "") {
         return null;
@@ -651,6 +694,9 @@ function numberOrNull(value: unknown): number | null {
     return Number.isFinite(normalized) ? normalized : null;
 }
 
+// Reference: PostHog autocapture checks EventTarget/Element shape defensively
+// before reading DOM attributes.
+// https://github.com/PostHog/posthog-js/blob/main/packages/browser/src/autocapture.ts
 function isElement(value: unknown): value is Element {
     return (
         typeof value === "object" &&
@@ -660,9 +706,10 @@ function isElement(value: unknown): value is Element {
     );
 }
 
+// Reference: uuid v4 prefers crypto-backed randomness; this SDK uses
+// crypto.randomUUID when available and a test/legacy fallback otherwise.
+// https://github.com/uuidjs/uuid/blob/main/src/v4.ts
 function id(prefix: string): string {
-    // Prefer crypto.randomUUID(), with a non-crypto fallback for older test and
-    // browser environments. Event IDs are for dedupe, not authentication.
     const value =
         typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
             ? crypto.randomUUID()
@@ -670,10 +717,16 @@ function id(prefix: string): string {
     return `${prefix}_${value}`;
 }
 
+// Reference: PostHog autocapture trims and filters DOM attributes before adding
+// them to event properties.
+// https://github.com/PostHog/posthog-js/blob/main/packages/browser/src/autocapture.ts
 function attr(element: Element, name: string): string | null {
     return element.getAttribute(name)?.trim() || null;
 }
 
+// Reference: analytics SDKs treat user-agent device detection as a best-effort
+// fallback, not as authoritative identity or targeting data.
+// https://github.com/amplitude/Amplitude-TypeScript/blob/main/packages/analytics-browser/src/browser-client.ts
 function detectDevice(): string | undefined {
     if (typeof navigator === "undefined") {
         return undefined;
@@ -685,6 +738,9 @@ function detectDevice(): string | undefined {
     return "desktop";
 }
 
+// Reference: mature SDK transports guard JSON serialization so one bad custom
+// property does not crash the whole capture path.
+// https://github.com/PostHog/posthog-js/blob/main/packages/browser/src/request-queue.ts
 function serialize(properties: EventProperties): string {
     try {
         return JSON.stringify(properties);
@@ -693,8 +749,10 @@ function serialize(properties: EventProperties): string {
     }
 }
 
+// Reference: truncate-utf8-bytes avoids cutting a multi-byte character in the
+// middle when enforcing byte limits.
+// https://github.com/parshap/truncate-utf8-bytes/blob/master/index.js
 function truncateUtf8(value: string, maxBytes: number): string {
-    // Limit by UTF-8 bytes and avoid splitting a multi-byte code point.
     const bytes = new TextEncoder().encode(value);
     if (bytes.length <= maxBytes) return value;
 
