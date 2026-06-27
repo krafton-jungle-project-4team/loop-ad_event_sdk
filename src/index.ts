@@ -57,7 +57,7 @@ export interface EventContext {
 /**
  * host service가 전달하는 로그인 사용자 식별자입니다.
  *
- * SDK는 anonymous id를 만들지 않고 JWT도 읽지 않습니다. `userId`와 `sessionId`가
+ * SDK는 anonymous id를 만들지 않습니다. `userId`와 `sessionId`가
  * 모두 준비된 뒤에만 이벤트를 전송합니다.
  */
 export interface Identity {
@@ -859,6 +859,13 @@ function warn(debug: boolean, message: string, ...details: unknown[]): void {
     }
 }
 
+/**
+ * DOM autocapture에서 문자열 context로 읽을 `data-loopad-*` attribute 매핑입니다.
+ *
+ * 각 tuple은 `[TrackFields key, HTML attribute name]` 형태입니다.
+ * `fieldsFromElement()`가 이 표를 순회해 명시적으로 붙은 attribute만 읽고,
+ * 값이 비어 있지 않을 때만 event fields에 복사합니다.
+ */
 const TEXT_ATTRIBUTES = [
     ["channel", "data-loopad-channel"],
     ["campaignId", "data-loopad-campaign-id"],
@@ -881,6 +888,13 @@ const TEXT_ATTRIBUTES = [
     ["banditDecisionId", "data-loopad-bandit-decision-id"]
 ] as const;
 
+/**
+ * DOM autocapture에서 숫자로 해석할 `data-loopad-*` attribute 매핑입니다.
+ *
+ * 숫자 field는 `numberOrNull()`을 통과한 finite number만 event fields에 들어갑니다.
+ * 이후 payload 생성 시 `price`와 `revenue`는 `money()`로, `quantity`는 `quantity()`로
+ * 다시 정규화되어 ClickHouse에 안전한 숫자로 전송됩니다.
+ */
 const NUMBER_ATTRIBUTES = [
     ["price", "data-loopad-price"],
     ["quantity", "data-loopad-quantity"],
