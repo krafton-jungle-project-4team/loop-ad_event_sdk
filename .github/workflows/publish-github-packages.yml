@@ -1,0 +1,48 @@
+name: Publish GitHub Package
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - closed
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://npm.pkg.github.com
+          scope: "@krafton-jungle-project-4team"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Set date-based package version
+        run: |
+          version_date="$(TZ=Asia/Seoul date +'%Y%m%d')"
+          version="0.1.${version_date}-run.${GITHUB_RUN_NUMBER}"
+          npm version "$version" --no-git-tag-version
+          echo "Publishing @krafton-jungle-project-4team/loop-ad_event_sdk@$version"
+
+      - name: Verify
+        run: npm run verify
+
+      - name: Publish to GitHub Packages
+        run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

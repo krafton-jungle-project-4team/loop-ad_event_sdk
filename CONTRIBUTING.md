@@ -41,6 +41,9 @@ npm test
 ```text
 .
 ├── .gitignore
+├── .github/
+│   └── workflows/
+│       └── publish-github-packages.yml
 ├── README.md
 ├── CONTRIBUTING.md
 ├── resources_collection-sdk-analysis-series.md
@@ -110,3 +113,19 @@ explanation 중 하나를 먼저 정하고 분리합니다.
 `package.json`의 `files` 설정은 npm package에 `dist/`와 `README.md`만 포함합니다.
 `CONTRIBUTING.md`와 `resources_*.md`는 GitHub 저장소에서 보는 개발 문서입니다.
 패키지 사용자에게 꼭 필요한 내용은 README에 남겨야 합니다.
+
+## GitHub Packages 배포
+
+`main` branch로 PR이 merge되면 `.github/workflows/publish-github-packages.yml`이
+실행됩니다.
+
+workflow는 다음 순서로 동작합니다.
+
+1. `npm ci`로 의존성을 설치합니다.
+2. KST 기준 날짜와 `GITHUB_RUN_NUMBER`로 `0.1.YYYYMMDD-run.N` 버전을 만듭니다.
+3. `npm version --no-git-tag-version`으로 workflow 작업 디렉터리의 package version만 바꿉니다.
+4. `npm run verify`로 typecheck, build, test를 실행합니다.
+5. `npm publish`로 GitHub Packages에 배포합니다.
+
+GitHub Actions의 `GITHUB_TOKEN`을 사용하므로 repo workflow 권한에는
+`packages: write`가 필요합니다. 별도 npm token secret은 사용하지 않습니다.

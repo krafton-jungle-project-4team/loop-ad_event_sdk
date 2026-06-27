@@ -1,9 +1,16 @@
 {
-    "name": "loop-ad_event_sdk",
+    "name": "@krafton-jungle-project-4team/loop-ad_event_sdk",
     "version": "0.1.0",
     "description": "Loop Ad browser event collection SDK for the raw event pipeline.",
     "type": "module",
     "sideEffects": false,
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/krafton-jungle-project-4team/loop-ad_event_sdk.git"
+    },
+    "publishConfig": {
+        "registry": "https://npm.pkg.github.com"
+    },
     "main": "./dist/index.cjs",
     "module": "./dist/index.mjs",
     "types": "./dist/types/index.d.ts",
