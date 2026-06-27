@@ -23,7 +23,7 @@ flowchart TD
     K -->|no| M["drop event"]
     N["setIdentity(identity, context?)"] --> O["current page_view on identity transition"]
     O --> G
-    L --> P["fetch(endpoint, ClickHouse-shaped payload)"]
+    L --> P["fetch(INGEST_ENDPOINT, ClickHouse-shaped payload)"]
 ```
 
 ## 파일 배치
@@ -61,7 +61,8 @@ client.destroy()
 
 SDK가 직접 Kafka, ClickHouse, Redis, AWS secret을 읽지 않습니다. 브라우저에서
 이벤트 draft를 만들고, identity가 있으면 Event Collector ingest endpoint로 보내는
-것만 담당합니다.
+것만 담당합니다. ingest endpoint는 `loop-ad_infra/docs/service-endpoints.md`의
+`https://ingest.dev.loop-ad.org` 고정 contract를 그대로 사용합니다.
 
 ## Identity Gate
 
@@ -134,7 +135,7 @@ SPA route 변경은 `history.pushState`, `history.replaceState`, `popstate`,
 MVP는 이벤트 하나당 HTTP 요청 하나를 보냅니다.
 
 ```js
-fetch(endpoint, {
+fetch(INGEST_ENDPOINT, {
   method: "POST",
   headers: { "Content-Type": "application/json" },
   credentials: "omit",

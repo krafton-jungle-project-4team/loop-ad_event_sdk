@@ -49,7 +49,6 @@ export interface TrackFields extends EventContext {
 
 export interface InitOptions {
     projectId: string;
-    endpoint?: string | null;
     identity?: Identity | null;
     debug?: boolean | null;
     autoTrackPageViews?: boolean | null;
@@ -244,7 +243,7 @@ class Runtime {
             return;
         }
 
-        void fetch(this.config.endpoint, {
+        void fetch(INGEST_ENDPOINT, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             credentials: "omit",
@@ -379,7 +378,6 @@ class Runtime {
 
 interface DefaultInitOptions {
     projectId: string;
-    endpoint: string;
     identity: Identity | null;
     debug: boolean;
     autoTrackPageViews: boolean;
@@ -396,7 +394,7 @@ interface EventDraft {
 }
 
 const SDK_NAME = "loop-ad_event_sdk";
-const DEFAULT_ENDPOINT = "https://ingest.dev.loop-ad.org";
+const INGEST_ENDPOINT = "https://ingest.dev.loop-ad.org";
 const DOM_SELECTOR = "[data-loopad-event]";
 const DOM_EVENTS = ["click", "change", "submit"] as const;
 const TEXT_LIMIT_BYTES = 160;
@@ -417,7 +415,6 @@ function withDefaultInitOptions(options: InitOptions): DefaultInitOptions {
 
     return {
         projectId,
-        endpoint: endpoint(options.endpoint),
         identity: identityFromInit(options),
         debug: options.debug ?? false,
         autoTrackPageViews: options.autoTrackPageViews ?? true,
@@ -477,23 +474,6 @@ function cleanContext(context: EventContext): EventContext {
         banditDecisionId: text(context.banditDecisionId) ?? null,
         rewardValue: numberOrNull(context.rewardValue)
     };
-}
-
-// Reference: validator.js isURL shows URL validation has many edge cases; this
-// MVP intentionally accepts only absolute http(s) URLs through the platform URL API.
-// https://github.com/validatorjs/validator.js/blob/master/src/lib/isURL.js
-function endpoint(value: string | null | undefined): string {
-    const candidate = text(value) ?? DEFAULT_ENDPOINT;
-
-    try {
-        const parsed = new URL(candidate);
-        if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
-            throw new Error("unsupported protocol");
-        }
-        return parsed.toString();
-    } catch {
-        throw new Error("LoopAdEventSDK endpoint must be an http(s) URL.");
-    }
 }
 
 // Reference: PostHog autocapture extracts only allowlisted DOM metadata and

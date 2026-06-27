@@ -28,7 +28,7 @@
 | 구성요소 | 성숙한 SDK에서의 역할 | MVP 반영 |
 |---|---|---|
 | Public client | `track`, `identify`, `setUserId`, `setSessionId`, `reset` 같은 API를 제공 | `track`, `setIdentity`, `clearIdentity`, `destroy` |
-| Config normalization | SDK 시작 전에 endpoint, tracking 옵션, default 값을 확정 | `withDefaultInitOptions()` |
+| Config normalization | SDK 시작 전에 endpoint, tracking 옵션, default 값을 확정 | ingest endpoint는 infra contract 상수, 나머지는 `withDefaultInitOptions()` |
 | Identity manager | user id, anonymous id, session id를 분리 관리 | anonymous id를 만들지 않고 `Identity { userId, sessionId }`만 관리 |
 | Autocapture | document-level listener로 click/change/submit 등 수집 | `data-loopad-event` 기반 DOM event delegation |
 | Page tracking | 초기 page view와 SPA route 변경을 수집 | History API patch + `popstate`/`hashchange` |

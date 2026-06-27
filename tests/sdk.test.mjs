@@ -56,7 +56,7 @@ test("records the current page when identity becomes ready", () => {
     });
 
     assert.equal(requests.length, 1);
-    assert.equal(requests[0].url, "https://ingest.dev.loop-ad.org/");
+    assert.equal(requests[0].url, "https://ingest.dev.loop-ad.org");
     assert.equal(requests[0].body.project_id, "demo-shoppingmall");
     assert.equal(requests[0].body.event_name, "page_view");
     assert.equal(requests[0].body.user_id, "user-1");
@@ -101,6 +101,8 @@ test("sends initial page_view immediately when identity is already known", () =>
 test("maps manual product_view fields to snake_case payload fields", () => {
     activeSdk = init({
         projectId: "demo-shoppingmall",
+        // The ingest domain is fixed by loop-ad_infra service-endpoints.md.
+        // Runtime JS callers may pass an endpoint field, but the SDK ignores it.
         endpoint: "http://localhost:8080/events",
         autoTrackPageViews: false,
         identity: {
@@ -127,7 +129,7 @@ test("maps manual product_view fields to snake_case payload fields", () => {
     });
 
     assert.equal(requests.length, 1);
-    assert.equal(requests[0].url, "http://localhost:8080/events");
+    assert.equal(requests[0].url, "https://ingest.dev.loop-ad.org");
     assert.equal(requests[0].body.event_id, "event-1");
     assert.equal(requests[0].body.user_id, "user-1");
     assert.equal(requests[0].body.session_id, "session-1");
