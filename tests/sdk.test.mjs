@@ -33,7 +33,6 @@ test("exports a small runtime API", () => {
     assert.equal(typeof init, "function");
     assert.equal(typeof version, "string");
     assert.equal("defaultEndpoint" in sdkModule, false);
-    assert.equal("LoopAdEventPayload" in sdkModule, false);
 
     activeSdk = init({ projectId: "demo-shoppingmall", autoTrackPageViews: false });
 
@@ -141,6 +140,29 @@ test("maps manual product_view fields to snake_case payload fields", () => {
 
     const properties = JSON.parse(requests[0].body.properties_json);
     assert.equal(properties.route_group, "product-detail");
+});
+
+test("sends custom string event names", () => {
+    activeSdk = init({
+        projectId: "demo-shoppingmall",
+        autoTrackPageViews: false,
+        identity: {
+            userId: "user-1",
+            sessionId: "session-1"
+        }
+    });
+
+    activeSdk.track("signup_completed", {
+        campaignId: "summer-2026",
+        properties: { source: "hero_banner" }
+    });
+
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].body.event_name, "signup_completed");
+    assert.equal(requests[0].body.campaign_id, "summer-2026");
+
+    const properties = JSON.parse(requests[0].body.properties_json);
+    assert.equal(properties.source, "hero_banner");
 });
 
 test("setIdentity can update shared context for later events", () => {

@@ -1,16 +1,3 @@
-export type StandardEventName =
-    | "page_view"
-    | "product_view"
-    | "add_to_cart"
-    | "checkout_start"
-    | "purchase"
-    | "ad_impression"
-    | "ad_click"
-    | "coupon_issued"
-    | "coupon_used";
-
-export type EventName = StandardEventName | (string & {});
-
 export type EventPropertyValue =
     | string
     | number
@@ -104,7 +91,7 @@ interface LoopAdEventPayload {
 }
 
 export interface LoopAdEventSdkClient {
-    track(eventName: EventName, fields?: TrackFields): void;
+    track(eventName: string, fields?: TrackFields): void;
     setIdentity(identity: Identity, context?: EventContext | null): void;
     clearIdentity(): void;
     destroy(): void;
@@ -130,7 +117,7 @@ declare const __SDK_VERSION__: string | undefined;
 
 class Runtime {
     readonly client: LoopAdEventSdkClient = Object.freeze({
-        track: (eventName: EventName, fields?: TrackFields) => this.track(eventName, fields),
+        track: (eventName: string, fields?: TrackFields) => this.track(eventName, fields),
         setIdentity: (identity: Identity, context?: EventContext | null) =>
             this.setIdentity(identity, context),
         clearIdentity: () => this.clearIdentity(),
@@ -161,7 +148,7 @@ class Runtime {
     }
 
     private track(
-        eventName: EventName,
+        eventName: string,
         fields: TrackFields = {},
         previousUrl?: string,
         elementInfo?: { [key: string]: EventPropertyValue }

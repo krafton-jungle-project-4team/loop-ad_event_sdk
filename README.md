@@ -40,7 +40,6 @@ npm run verify
 dist/index.mjs
 dist/index.cjs
 dist/loop-ad-event-sdk.iife.js
-dist/types/index.d.ts
 ```
 
 ## 권장 사용
@@ -48,7 +47,7 @@ dist/types/index.d.ts
 앱 부팅 시 SDK를 먼저 시작합니다. 이 시점에는 로그인 사용자 정보가 없어도
 됩니다.
 
-```ts
+```js
 import { init } from "loop-ad_event_sdk";
 
 const sdk = init({
@@ -62,7 +61,7 @@ const sdk = init({
 
 인증 상태가 준비되면 앱의 auth/session layer가 identity를 주입합니다.
 
-```ts
+```js
 const user = await fetchMe();
 
 if (user) {
@@ -75,7 +74,7 @@ if (user) {
 
 로그인/회원가입 성공 콜백에서도 같은 방식으로 호출합니다.
 
-```ts
+```js
 async function onSignupSuccess(result) {
   sdk.setIdentity({
     userId: result.user.id,
@@ -90,7 +89,7 @@ async function onSignupSuccess(result) {
 
 로그아웃 시에는 identity를 비웁니다.
 
-```ts
+```js
 sdk.clearIdentity();
 ```
 
@@ -112,9 +111,12 @@ sdk.clearIdentity();
 </script>
 ```
 
-## 표준 이벤트명
+## 이벤트명
 
-ClickHouse 분석과 추천 서버의 퍼널 분석을 위해 아래 이름을 우선 사용합니다.
+`track()`의 첫 번째 인자는 문자열입니다. SDK가 브라우저에서 표준 이벤트가 아닌
+이름을 차단하지는 않습니다.
+
+Loop Ad 분석과 추천 파이프라인에서는 아래 표준 이벤트명을 우선 사용합니다.
 
 ```text
 page_view
@@ -127,6 +129,16 @@ ad_click
 coupon_issued
 coupon_used
 ```
+
+고객사 서비스에서 필요한 커스텀 이벤트도 전송할 수 있습니다.
+
+```js
+sdk.track("signup_completed");
+sdk.track("banner_hovered", { campaignId: "summer-2026" });
+```
+
+운영에서 엄격한 이벤트명 검증이 필요하면 브라우저 SDK가 아니라 Event Collector
+또는 tracking plan 단계에서 처리합니다.
 
 ## DOM attribute 수집
 
@@ -189,7 +201,7 @@ data-loopad-reward-value
 
 기본 정책은 아래와 같습니다.
 
-```ts
+```js
 const sdk = init({ projectId: "demo-shoppingmall" });
 
 sdk.track("product_view", { productId: "SKU-before-login" }); // dropped
