@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="ko">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>Loop Ad Event SDK Example</title>
+    </head>
+    <body>
+        <button
+            data-loopad-event="add_to_cart"
+            data-loopad-product-id="GGOEGCBD142299"
+            data-loopad-category="Home/Eco-Friendly"
+            data-loopad-price="12900"
+            data-loopad-quantity="1"
+            data-loopad-prop-slot="product_detail"
+        >
+            Add to cart
+        </button>
+
+        <script src="../dist/loop-ad-event-sdk.iife.js"></script>
+        <script>
+            const sdk = LoopAdEventSDK.init({
+                projectId: "demo-shoppingmall",
+                debug: true,
+                context: {
+                    channel: "demo",
+                    device: "desktop"
+                }
+            });
+
+            sdk.track("product_view", {
+                productId: "GGOEGCBD142299",
+                category: "Home/Eco-Friendly",
+                price: 12900
+            });
+        </script>
+    </body>
+</html>
