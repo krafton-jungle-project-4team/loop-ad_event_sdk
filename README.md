@@ -3,9 +3,9 @@
 Loop Ad Event SDK는 고객사 웹사이트 또는 데모 쇼핑몰 프론트엔드에서 사용자 행동
 이벤트를 수집해 Event Collector ingest endpoint로 보내는 브라우저 SDK입니다.
 
-이 SDK는 서버, Kafka, ClickHouse, Redis, AWS secret을 직접 다루지 않습니다.
-브라우저에서 ClickHouse `events` 테이블에 맞는 JSON payload를 만들고,
-`https://ingest.dev.loop-ad.org`로 전송하는 것만 담당합니다.
+SDK는 앱 시작 시 바로 붙일 수 있지만 `userId`와 `sessionId`가 준비되기 전에는
+Event Collector로 전송하지 않습니다. 로그인 이전 활동은 메모리에 보관하지 않고
+drop하며, `setIdentity()` 이후 발생한 이벤트만 전송합니다.
 
 ## 참고한 계약
 
@@ -15,6 +15,16 @@ Loop Ad Event SDK는 고객사 웹사이트 또는 데모 쇼핑몰 프론트엔
   `https://ingest.dev.loop-ad.org`를 고정 contract로 사용한다.
 - ClickHouse `events` 테이블: 사용자 행동 로그와 추천/광고 reward 계산의 원천
   이벤트를 저장한다.
+
+## 참고한 SDK 패턴
+
+- Segment Analytics Next: public API, identity store, queue, page lifecycle을
+  분리한다.
+- PostHog JS: document-level autocapture와 request queue를 둔다.
+- Amplitude Browser SDK: identity/session setter와 default tracking plugin을
+  분리한다.
+
+정리 문서: [성숙한 분석 SDK 패턴 분석](docs/mature-sdk-patterns.md)
 
 ## 설치와 검증
 
@@ -32,7 +42,10 @@ dist/loop-ad-event-sdk.iife.js
 dist/types/index.d.ts
 ```
 
-## ESM 사용
+## 권장 사용
+
+앱 부팅 시 SDK를 먼저 시작합니다. 이 시점에는 로그인 사용자 정보가 없어도
+됩니다.
 
 ```ts
 import { init } from "loop-ad_event_sdk";
@@ -44,15 +57,41 @@ const sdk = init({
     device: "mobile"
   }
 });
+```
 
-sdk.identify("user-123");
+인증 상태가 준비되면 앱의 auth/session layer가 identity를 주입합니다.
 
-sdk.track("product_view", {
-  category: "Home/Eco-Friendly",
-  productId: "GGOEGCBD142299",
-  inventoryStatus: "in_stock",
-  price: 12900
-});
+```ts
+const user = await fetchMe();
+
+if (user) {
+  sdk.setIdentity({
+    userId: user.id,
+    sessionId: user.session.id
+  });
+
+  // 로그인 이후 현재 화면 page_view가 필요하면 앱이 명시적으로 호출합니다.
+  sdk.pageView();
+}
+```
+
+로그인/회원가입 성공 콜백에서도 같은 방식으로 호출합니다.
+
+```ts
+async function onSignupSuccess(result) {
+  sdk.setIdentity({
+    userId: result.user.id,
+    sessionId: result.session.id
+  });
+
+  sdk.track("signup_completed");
+}
+```
+
+로그아웃 시에는 identity를 비웁니다.
+
+```ts
+sdk.clearIdentity();
 ```
 
 ## script tag 사용
@@ -64,9 +103,12 @@ sdk.track("product_view", {
     projectId: "demo-shoppingmall"
   });
 
-  sdk.track("checkout_start", {
-    quantity: 2
-  });
+  window.onAuthReady = function (user, session) {
+    sdk.setIdentity({
+      userId: user.id,
+      sessionId: session.id
+    });
+  };
 </script>
 ```
 
@@ -89,7 +131,7 @@ coupon_used
 ## DOM attribute 수집
 
 마크업에 `data-loopad-event`를 붙이면 SDK가 document event delegation으로
-수집합니다.
+수집합니다. identity가 준비되기 전이면 전송하지 않고 drop합니다.
 
 ```html
 <button
@@ -143,6 +185,30 @@ data-loopad-reward-value
 </button>
 ```
 
+## Identity gate
+
+기본 정책은 아래와 같습니다.
+
+```ts
+const sdk = init({ projectId: "demo-shoppingmall" });
+
+sdk.track("product_view", { productId: "SKU-before-login" }); // dropped
+
+sdk.setIdentity({
+  userId: "user-1",
+  sessionId: "session-1"
+});
+
+sdk.track("product_view", { productId: "SKU-after-login" }); // sent
+```
+
+- `userId`, `sessionId` 없이는 이벤트를 전송하지 않는다.
+- 로그인 이전 활동은 SDK가 메모리에 보관하지 않는다.
+- `setIdentity()`: 이후 이벤트에 사용할 `userId`, `sessionId`를 설정한다.
+- `clearIdentity()`: logout 후 identity 없는 이벤트를 다시 drop한다.
+
+JWT, access token, refresh token은 SDK 옵션이나 이벤트 payload에 넣지 않습니다.
+
 ## Payload 형식
 
 SDK는 Event Collector로 아래처럼 ClickHouse `events` 컬럼에 맞춘 flat JSON을
@@ -153,7 +219,7 @@ SDK는 Event Collector로 아래처럼 ClickHouse `events` 컬럼에 맞춘 flat
   "project_id": "demo-shoppingmall",
   "event_id": "evt_...",
   "user_id": "user-123",
-  "session_id": "sess_...",
+  "session_id": "session-123",
   "event_time": "2026-06-27T10:00:00.000Z",
   "event_name": "product_view",
   "channel": "demo",
@@ -189,7 +255,7 @@ SDK는 Event Collector로 아래처럼 ClickHouse `events` 컬럼에 맞춘 flat
 - 버튼 텍스트도 기본 수집하지 않습니다.
 - visible text가 꼭 필요하면 `data-loopad-text="true"` 또는
   `data-loopad-label`을 명시합니다.
-- secret, DB credential, API key는 브라우저 SDK 옵션에 넣지 않습니다.
+- secret, DB credential, API key, JWT는 브라우저 SDK 옵션에 넣지 않습니다.
 
 운영 적용 전에는 고객사 서비스의 동의 화면, 개인정보 처리방침, 보관 기간,
 국가별 규제 요구사항을 별도로 검토해야 합니다.
@@ -197,3 +263,4 @@ SDK는 Event Collector로 아래처럼 ClickHouse `events` 컬럼에 맞춘 flat
 ## 개발 문서
 
 - [코드 구조 튜토리얼](docs/code-structure-tutorial.md)
+- [성숙한 분석 SDK 패턴 분석](docs/mature-sdk-patterns.md)

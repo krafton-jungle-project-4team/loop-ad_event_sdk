@@ -33,21 +33,45 @@ test("exports a small runtime API", () => {
     assert.equal(defaultEndpoint, "https://ingest.dev.loop-ad.org");
 });
 
-test("tracks an initial page_view with the ClickHouse event shape", () => {
+test("starts autocapture immediately but drops pre-identity events", () => {
     activeSdk = init({ projectId: "demo-shoppingmall" });
+
+    assert.equal(requests.length, 0);
+
+    activeSdk.setIdentity({
+        userId: "user-1",
+        sessionId: "session-1"
+    });
+
+    assert.equal(requests.length, 0);
+
+    activeSdk.pageView();
 
     assert.equal(requests.length, 1);
     assert.equal(requests[0].url, "https://ingest.dev.loop-ad.org/");
     assert.equal(requests[0].body.project_id, "demo-shoppingmall");
     assert.equal(requests[0].body.event_name, "page_view");
-    assert.match(requests[0].body.event_id, /^evt_/);
-    assert.match(requests[0].body.user_id, /^usr_anon_/);
-    assert.match(requests[0].body.session_id, /^sess_/);
-    assert.equal(requests[0].body.product_id, "");
+    assert.equal(requests[0].body.user_id, "user-1");
+    assert.equal(requests[0].body.session_id, "session-1");
 
     const properties = JSON.parse(requests[0].body.properties_json);
     assert.equal(properties.page.path, "/products/sku-1");
     assert.equal(properties.sdk.name, "loop-ad_event_sdk");
+});
+
+test("sends initial page_view immediately when identity is already known", () => {
+    activeSdk = init({
+        projectId: "demo-shoppingmall",
+        identity: {
+            userId: "user-1",
+            sessionId: "session-1"
+        }
+    });
+
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].body.event_name, "page_view");
+    assert.equal(requests[0].body.user_id, "user-1");
+    assert.equal(requests[0].body.session_id, "session-1");
 });
 
 test("maps manual product_view fields to snake_case payload fields", () => {
@@ -55,6 +79,10 @@ test("maps manual product_view fields to snake_case payload fields", () => {
         projectId: "demo-shoppingmall",
         endpoint: "http://localhost:8080/events",
         autoTrackPageViews: false,
+        identity: {
+            userId: "user-1",
+            sessionId: "session-1"
+        },
         context: {
             channel: "google",
             campaignId: "summer-2026",
@@ -66,8 +94,6 @@ test("maps manual product_view fields to snake_case payload fields", () => {
 
     activeSdk.track("product_view", {
         eventId: "event-1",
-        userId: "user-1",
-        sessionId: "session-1",
         eventTime: "2026-06-27T10:00:00.000+09:00",
         category: "Home/Eco-Friendly",
         productId: "GGOEGCBD142299",
@@ -92,13 +118,14 @@ test("maps manual product_view fields to snake_case payload fields", () => {
     assert.equal(properties.route_group, "product-detail");
 });
 
-test("identify changes the user id for later events", () => {
+test("identify is a compatibility alias for setting identity and context", () => {
     activeSdk = init({ projectId: "demo-shoppingmall", autoTrackPageViews: false });
 
-    activeSdk.identify("user-42", { ageGroup: "20s" });
+    activeSdk.identify("user-42", "session-42", { ageGroup: "20s" });
     activeSdk.track("checkout_start", { quantity: 2 });
 
     assert.equal(requests[0].body.user_id, "user-42");
+    assert.equal(requests[0].body.session_id, "session-42");
     assert.equal(requests[0].body.age_group, "20s");
     assert.equal(requests[0].body.quantity, 2);
 });
@@ -117,6 +144,16 @@ test("collects annotated DOM events without reading form input values", () => {
     button.textContent = "Add to cart";
 
     document.dispatch("click", { type: "click", target: button });
+    assert.equal(requests.length, 0);
+
+    activeSdk.setIdentity({
+        userId: "user-1",
+        sessionId: "session-1"
+    });
+
+    assert.equal(requests.length, 0);
+
+    document.dispatch("click", { type: "click", target: button });
 
     assert.equal(requests.length, 1);
     assert.equal(requests[0].body.event_name, "add_to_cart");
@@ -131,8 +168,14 @@ test("collects annotated DOM events without reading form input values", () => {
     assert.equal(properties.element.text, undefined);
 });
 
-test("tracks SPA navigation through history patching", () => {
-    activeSdk = init({ projectId: "demo-shoppingmall" });
+test("tracks SPA navigation through history patching after identity is ready", () => {
+    activeSdk = init({
+        projectId: "demo-shoppingmall",
+        identity: {
+            userId: "user-1",
+            sessionId: "session-1"
+        }
+    });
     requests = [];
 
     history.pushState(null, "", "/checkout");
@@ -146,6 +189,25 @@ test("tracks SPA navigation through history patching", () => {
         properties.page.previous_url,
         "https://demo-shoppingmall.dev.loop-ad.org/products/sku-1"
     );
+});
+
+test("clearIdentity keeps logged-out work from attaching to a future login", () => {
+    activeSdk = init({ projectId: "demo-shoppingmall", autoTrackPageViews: false });
+
+    activeSdk.track("product_view", { productId: "SKU-before-login" });
+    activeSdk.clearIdentity();
+    activeSdk.track("add_to_cart", { productId: "SKU-logged-out" });
+    activeSdk.setIdentity({
+        userId: "user-1",
+        sessionId: "session-1"
+    });
+
+    assert.equal(requests.length, 0);
+
+    activeSdk.track("product_view", { productId: "SKU-after-login" });
+
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].body.product_id, "SKU-after-login");
 });
 
 function createLocation() {
@@ -197,7 +259,6 @@ function createHistory() {
 }
 
 function createDocument() {
-    const cookies = new Map();
     return {
         title: "Product detail",
         referrer: "https://referrer.example",
@@ -215,25 +276,6 @@ function createDocument() {
             for (const handler of listeners.get(type) ?? []) {
                 handler(event);
             }
-        },
-        get cookie() {
-            return Array.from(cookies.entries())
-                .map(([key, value]) => `${key}=${value}`)
-                .join("; ");
-        },
-        set cookie(value) {
-            const [pair, ...attributes] = value.split("; ");
-            const [key, cookieValue = ""] = pair.split("=");
-            const maxAge = attributes.find((attribute) =>
-                attribute.toLowerCase().startsWith("max-age=")
-            );
-
-            if (maxAge === "Max-Age=0") {
-                cookies.delete(key);
-                return;
-            }
-
-            cookies.set(key, cookieValue);
         }
     };
 }

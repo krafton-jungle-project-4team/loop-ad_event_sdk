@@ -28,6 +28,11 @@
                 }
             });
 
+            sdk.setIdentity({
+                userId: "demo-user-1",
+                sessionId: "demo-session-1"
+            });
+
             sdk.track("product_view", {
                 productId: "GGOEGCBD142299",
                 category: "Home/Eco-Friendly",

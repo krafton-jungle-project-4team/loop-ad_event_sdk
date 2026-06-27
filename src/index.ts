@@ -49,10 +49,13 @@ export interface EventContext {
     rewardValue?: number | null;
 }
 
+export interface Identity {
+    userId: string;
+    sessionId: string;
+}
+
 export interface TrackFields extends EventContext {
     eventId?: string | null;
-    userId?: string | null;
-    sessionId?: string | null;
     eventTime?: string | number | Date | null;
     properties?: EventProperties | null;
 }
@@ -60,10 +63,10 @@ export interface TrackFields extends EventContext {
 export interface InitOptions {
     projectId: string;
     endpoint?: string | null;
+    identity?: Identity | null;
     userId?: string | null;
+    sessionId?: string | null;
     debug?: boolean | null;
-    sessionTimeoutMs?: number | null;
-    visitorTtlDays?: number | null;
     autoTrackPageViews?: boolean | null;
     collectDomEvents?: boolean | null;
     context?: EventContext | null;
@@ -105,7 +108,9 @@ export interface LoopAdEventPayload {
 export interface LoopAdEventSdkClient {
     track(eventName: EventName, fields?: TrackFields): void;
     pageView(fields?: TrackFields): void;
-    identify(userId: string | null, context?: EventContext | null): void;
+    setIdentity(identity: Identity): void;
+    clearIdentity(): void;
+    identify(userId: string, sessionId: string, context?: EventContext | null): void;
     setContext(context: EventContext): void;
     destroy(): void;
 }
@@ -134,7 +139,10 @@ class Runtime {
     readonly client: LoopAdEventSdkClient = Object.freeze({
         track: (eventName: EventName, fields?: TrackFields) => this.track(eventName, fields),
         pageView: (fields?: TrackFields) => this.track("page_view", fields),
-        identify: (userId: string | null, context?: EventContext | null) => this.identify(userId, context),
+        setIdentity: (identity: Identity) => this.setIdentity(identity),
+        clearIdentity: () => this.clearIdentity(),
+        identify: (userId: string, sessionId: string, context?: EventContext | null) =>
+            this.identify(userId, sessionId, context),
         setContext: (context: EventContext) => this.setContext(context),
         destroy: () => this.destroy()
     });
@@ -142,9 +150,6 @@ class Runtime {
     destroyed = false;
 
     private currentUrl = "";
-    private memoryVisitorId: string | null = null;
-    private memorySessionId: string | null = null;
-    private memoryLastSeenAt = 0;
     private originalPushState: History["pushState"] | null = null;
     private originalReplaceState: History["replaceState"] | null = null;
 
@@ -163,7 +168,12 @@ class Runtime {
         }
     }
 
-    private track(eventName: EventName, fields: TrackFields = {}, previousUrl?: string, element?: Element): void {
+    private track(
+        eventName: EventName,
+        fields: TrackFields = {},
+        previousUrl?: string,
+        elementInfo?: { [key: string]: EventPropertyValue }
+    ): void {
         if (this.destroyed) {
             return;
         }
@@ -173,48 +183,55 @@ class Runtime {
             throw new Error("LoopAdEventSDK requires a non-empty event name.");
         }
 
-        const payload = this.payload(normalizedEventName, fields, previousUrl, element);
+        // Segment/PostHog/Amplitude keep capture separate from transport. This
+        // MVP keeps that boundary, but intentionally drops pre-identity events
+        // because Loop Ad only records logged-in activity.
+        const draft = this.draft(normalizedEventName, fields, previousUrl, elementInfo);
+        const identity = this.config.identity;
 
-        if (typeof fetch !== "function") {
-            warn(this.config.debug, "LoopAdEventSDK cannot send events because fetch is unavailable.");
+        if (!identity) {
+            warn(this.config.debug, "LoopAdEventSDK dropped an event because identity is not set.");
             return;
         }
 
-        void fetch(this.config.endpoint, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            credentials: "omit",
-            keepalive: true,
-            body: JSON.stringify(payload)
-        }).catch((error) => warn(this.config.debug, "LoopAdEventSDK event send failed.", error));
+        this.send(this.payload(draft, identity));
     }
 
-    private payload(
+    private draft(
         eventName: string,
         fields: TrackFields,
         previousUrl?: string,
-        element?: Element
-    ): LoopAdEventPayload {
-        const now = Date.now();
-        const session = this.session(now);
-        const context = { ...this.config.context, ...fields };
+        elementInfo?: { [key: string]: EventPropertyValue }
+    ): EventDraft {
         const properties: EventProperties = {
             ...(fields.properties ?? {}),
             page: page(previousUrl),
             sdk: { name: SDK_NAME, version }
         };
 
-        if (element) {
-            properties.element = elementProperties(element);
+        if (elementInfo) {
+            properties.element = elementInfo;
         }
 
         return {
+            eventName,
+            eventId: text(fields.eventId) ?? id("evt"),
+            eventTime: eventTime(fields.eventTime),
+            context: cleanContext({ ...this.config.context, ...fields }),
+            properties
+        };
+    }
+
+    private payload(draft: EventDraft, identity: Identity): LoopAdEventPayload {
+        const context = draft.context;
+
+        return {
             project_id: this.config.projectId,
-            event_id: text(fields.eventId) ?? id("evt"),
-            user_id: text(fields.userId) ?? this.config.userId ?? session.visitorId,
-            session_id: text(fields.sessionId) ?? session.sessionId,
-            event_time: eventTime(fields.eventTime),
-            event_name: eventName,
+            event_id: draft.eventId,
+            user_id: identity.userId,
+            session_id: identity.sessionId,
+            event_time: draft.eventTime,
+            event_name: draft.eventName,
             channel: text(context.channel) ?? "",
             campaign_id: text(context.campaignId) ?? "",
             age_group: text(context.ageGroup) ?? "",
@@ -238,16 +255,39 @@ class Runtime {
             bandit_arm_id: text(context.banditArmId) ?? "",
             bandit_decision_id: text(context.banditDecisionId) ?? "",
             reward_value: numberOrZero(context.rewardValue),
-            properties_json: serialize(properties)
+            properties_json: serialize(draft.properties)
         };
     }
 
-    private identify(userId: string | null, context?: EventContext | null): void {
-        this.config.userId = text(userId) ?? null;
+    private send(payload: LoopAdEventPayload): void {
+        if (typeof fetch !== "function") {
+            warn(this.config.debug, "LoopAdEventSDK cannot send events because fetch is unavailable.");
+            return;
+        }
+
+        void fetch(this.config.endpoint, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: "omit",
+            keepalive: true,
+            body: JSON.stringify(payload)
+        }).catch((error) => warn(this.config.debug, "LoopAdEventSDK event send failed.", error));
+    }
+
+    private setIdentity(identity: Identity): void {
+        this.config.identity = normalizeIdentity(identity);
+    }
+
+    private identify(userId: string, sessionId: string, context?: EventContext | null): void {
+        this.setIdentity({ userId, sessionId });
 
         if (context) {
             this.setContext(context);
         }
+    }
+
+    private clearIdentity(): void {
+        this.config.identity = null;
     }
 
     private setContext(context: EventContext): void {
@@ -255,34 +295,6 @@ class Runtime {
             ...this.config.context,
             ...context
         });
-    }
-
-    private session(now: number): Session {
-        if (typeof document === "undefined") {
-            const expired = !this.memorySessionId || now - this.memoryLastSeenAt > this.config.sessionTimeoutMs;
-            this.memoryVisitorId ??= id("usr_anon");
-            const sessionId = expired || !this.memorySessionId ? id("sess") : this.memorySessionId;
-            this.memorySessionId = sessionId;
-            this.memoryLastSeenAt = now;
-            return { visitorId: this.memoryVisitorId, sessionId };
-        }
-
-        const storedVisitorId = getCookie(STORAGE_KEYS.visitorId);
-        const storedSessionId = getCookie(STORAGE_KEYS.sessionId);
-        const lastSeenAt = Number(getCookie(STORAGE_KEYS.lastSeenAt));
-        const expired =
-            !storedSessionId ||
-            !Number.isFinite(lastSeenAt) ||
-            now - lastSeenAt > this.config.sessionTimeoutMs;
-
-        const visitorId = storedVisitorId ?? id("usr_anon");
-        const sessionId = expired ? id("sess") : storedSessionId;
-
-        setCookie(STORAGE_KEYS.visitorId, visitorId, this.config.visitorTtlDays);
-        setCookie(STORAGE_KEYS.sessionId, sessionId, this.config.visitorTtlDays);
-        setCookie(STORAGE_KEYS.lastSeenAt, String(now), this.config.visitorTtlDays);
-
-        return { visitorId, sessionId };
     }
 
     private listenToDom(): void {
@@ -313,7 +325,9 @@ class Runtime {
             return;
         }
 
-        this.track(eventName, fieldsFromElement(element), undefined, element);
+        const fields = fieldsFromElement(element);
+        const elementInfo = elementProperties(element);
+        this.track(eventName, fields, undefined, elementInfo);
     };
 
     private patchHistory(): void {
@@ -382,32 +396,25 @@ class Runtime {
 interface DefaultInitOptions {
     projectId: string;
     endpoint: string;
-    userId: string | null;
+    identity: Identity | null;
     debug: boolean;
-    sessionTimeoutMs: number;
-    visitorTtlDays: number;
     autoTrackPageViews: boolean;
     collectDomEvents: boolean;
     context: EventContext;
 }
 
-interface Session {
-    visitorId: string;
-    sessionId: string;
+interface EventDraft {
+    eventName: string;
+    eventId: string;
+    eventTime: string;
+    context: EventContext;
+    properties: EventProperties;
 }
 
 const SDK_NAME = "loop-ad_event_sdk";
-const DEFAULT_SESSION_TIMEOUT_MS = 30 * 60 * 1000;
-const DEFAULT_VISITOR_TTL_DAYS = 365;
 const DOM_SELECTOR = "[data-loopad-event]";
 const DOM_EVENTS = ["click", "change", "submit"] as const;
 const TEXT_LIMIT_BYTES = 160;
-
-const STORAGE_KEYS = {
-    visitorId: "loopad_event_sdk_visitor_id",
-    sessionId: "loopad_event_sdk_session_id",
-    lastSeenAt: "loopad_event_sdk_last_seen_at"
-} as const;
 
 let active: Runtime | null = null;
 
@@ -426,18 +433,38 @@ function withDefaultInitOptions(options: InitOptions): DefaultInitOptions {
     return {
         projectId,
         endpoint: endpoint(options.endpoint),
-        userId: text(options.userId) ?? null,
+        identity: identityFromInit(options),
         debug: options.debug ?? false,
-        sessionTimeoutMs: positiveNumber(
-            options.sessionTimeoutMs,
-            DEFAULT_SESSION_TIMEOUT_MS,
-            "sessionTimeoutMs"
-        ),
-        visitorTtlDays: positiveNumber(options.visitorTtlDays, DEFAULT_VISITOR_TTL_DAYS, "visitorTtlDays"),
         autoTrackPageViews: options.autoTrackPageViews ?? true,
         collectDomEvents: options.collectDomEvents ?? true,
         context
     };
+}
+
+function identityFromInit(options: InitOptions): Identity | null {
+    if (options.identity) {
+        return normalizeIdentity(options.identity);
+    }
+
+    const userId = text(options.userId);
+    const sessionId = text(options.sessionId);
+
+    if (!userId && !sessionId) {
+        return null;
+    }
+
+    return normalizeIdentity({ userId: userId ?? "", sessionId: sessionId ?? "" });
+}
+
+function normalizeIdentity(identity: Identity): Identity {
+    const userId = text(identity.userId);
+    const sessionId = text(identity.sessionId);
+
+    if (!userId || !sessionId) {
+        throw new Error("LoopAdEventSDK requires non-empty userId and sessionId.");
+    }
+
+    return { userId, sessionId };
 }
 
 function cleanContext(context: EventContext): EventContext {
@@ -482,18 +509,6 @@ function endpoint(value: string | null | undefined): string {
     }
 }
 
-function positiveNumber(value: number | null | undefined, fallback: number, name: string): number {
-    if (value === null || value === undefined) {
-        return fallback;
-    }
-
-    if (!Number.isFinite(value) || value <= 0) {
-        throw new Error(`LoopAdEventSDK ${name} must be a positive number.`);
-    }
-
-    return value;
-}
-
 function fieldsFromElement(element: Element): TrackFields {
     const fields: Record<string, unknown> = {};
 
@@ -507,7 +522,11 @@ function fieldsFromElement(element: Element): TrackFields {
         if (value !== null) fields[key] = value;
     }
 
-    fields.properties = domProperties(element);
+    const properties = domProperties(element);
+    if (Object.keys(properties).length > 0) {
+        fields.properties = properties;
+    }
+
     return fields as TrackFields;
 }
 
@@ -531,8 +550,9 @@ function domListenEvent(element: Element): string {
 
 function domProperties(element: Element): EventProperties {
     const properties: EventProperties = {};
-    properties.element = elementProperties(element);
 
+    // PostHog autocapture uses allowlisted attributes instead of form values.
+    // We keep the same privacy shape with explicit data-loopad-prop-* only.
     for (const attributeName of attributeNames(element)) {
         if (!attributeName.startsWith("data-loopad-prop-")) {
             continue;
@@ -553,6 +573,8 @@ function domProperties(element: Element): EventProperties {
 }
 
 function attributeNames(element: Element): string[] {
+    // Mature browser SDKs carry old-browser fallbacks around DOM utilities.
+    // getAttributeNames() is modern; attributes is the safe fallback.
     if (typeof element.getAttributeNames === "function") {
         return element.getAttributeNames();
     }
@@ -561,6 +583,8 @@ function attributeNames(element: Element): string[] {
 }
 
 function collectText(element: Element): string | undefined {
+    // Autocapture SDKs avoid arbitrary visible text by default. Loop Ad only
+    // collects text when the integrator explicitly opts in on the element.
     const label = attr(element, "data-loopad-label");
     const textValue =
         label ??
@@ -602,20 +626,9 @@ function href(): string {
     return typeof location === "undefined" ? "" : location.href;
 }
 
-function getCookie(key: string): string | null {
-    const encodedKey = encodeURIComponent(key);
-    const pair = document.cookie.split("; ").find((item) => item.startsWith(`${encodedKey}=`));
-    return pair ? decodeURIComponent(pair.slice(encodedKey.length + 1)) : null;
-}
-
-function setCookie(key: string, value: string, ttlDays = DEFAULT_VISITOR_TTL_DAYS): void {
-    const secure = typeof location !== "undefined" && location.protocol === "https:" ? "; Secure" : "";
-    const maxAge = Math.floor(ttlDays * 86400);
-    const cookieValue = `${encodeURIComponent(key)}=${encodeURIComponent(value)}`;
-    document.cookie = `${cookieValue}; Path=/; SameSite=Lax; Max-Age=${maxAge}${secure}`;
-}
-
 function eventTime(value: TrackFields["eventTime"]): string {
+    // Accept Date, epoch millis, or caller-provided ISO-ish strings, mirroring
+    // common analytics SDK input leniency while normalizing generated values.
     if (value instanceof Date && Number.isFinite(value.getTime())) {
         return value.toISOString();
     }
@@ -670,6 +683,8 @@ function isElement(value: unknown): value is Element {
 }
 
 function id(prefix: string): string {
+    // Prefer crypto.randomUUID(), with a non-crypto fallback for older test and
+    // browser environments. Event IDs are for dedupe, not authentication.
     const value =
         typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
             ? crypto.randomUUID()
@@ -701,6 +716,7 @@ function serialize(properties: EventProperties): string {
 }
 
 function truncateUtf8(value: string, maxBytes: number): string {
+    // Limit by UTF-8 bytes and avoid splitting a multi-byte code point.
     const bytes = new TextEncoder().encode(value);
     if (bytes.length <= maxBytes) return value;
 
@@ -721,8 +737,6 @@ function warn(debug: boolean, message: string, ...details: unknown[]): void {
 }
 
 const TEXT_ATTRIBUTES = [
-    ["userId", "data-loopad-user-id"],
-    ["sessionId", "data-loopad-session-id"],
     ["channel", "data-loopad-channel"],
     ["campaignId", "data-loopad-campaign-id"],
     ["ageGroup", "data-loopad-age-group"],
