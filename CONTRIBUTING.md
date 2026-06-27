@@ -122,10 +122,17 @@ explanation 중 하나를 먼저 정하고 분리합니다.
 workflow는 다음 순서로 동작합니다.
 
 1. `npm ci`로 의존성을 설치합니다.
-2. KST 기준 날짜와 `GITHUB_RUN_NUMBER`로 `0.1.YYYYMMDD-run.N` 버전을 만듭니다.
+2. KST 기준 날짜, `GITHUB_RUN_NUMBER`, `GITHUB_RUN_ATTEMPT`로
+   `0.1.YYYYMMDD-run.N.A` 버전을 만듭니다.
 3. `npm version --no-git-tag-version`으로 workflow 작업 디렉터리의 package version만 바꿉니다.
 4. `npm run verify`로 typecheck, build, test를 실행합니다.
 5. `npm publish`로 GitHub Packages에 배포합니다.
+6. `dist/loop-ad-event-sdk.iife.js`를 GitHub Pages artifact로 배포합니다.
 
 GitHub Actions의 `GITHUB_TOKEN`을 사용하므로 repo workflow 권한에는
-`packages: write`가 필요합니다. 별도 npm token secret은 사용하지 않습니다.
+`packages: write`, `pages: write`, `id-token: write`가 필요합니다. 별도 npm token
+secret은 사용하지 않습니다.
+
+GitHub Packages는 npm install용 registry이고, script tag에서 바로 불러올 CDN은
+아닙니다. script tag 사용은 GitHub Pages에 배포된 IIFE bundle URL을 기준으로
+안내합니다.

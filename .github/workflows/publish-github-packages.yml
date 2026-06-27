@@ -11,11 +11,16 @@ on:
 permissions:
   contents: read
   packages: write
+  pages: write
+  id-token: write
 
 jobs:
   publish:
     if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true
     runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
 
     steps:
       - name: Checkout
@@ -35,7 +40,7 @@ jobs:
       - name: Set date-based package version
         run: |
           version_date="$(TZ=Asia/Seoul date +'%Y%m%d')"
-          version="0.1.${version_date}-run.${GITHUB_RUN_NUMBER}"
+          version="0.1.${version_date}-run.${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}"
           npm version "$version" --no-git-tag-version
           echo "Publishing @krafton-jungle-project-4team/loop-ad_event_sdk@$version"
 
@@ -46,3 +51,34 @@ jobs:
         run: npm publish
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Prepare script tag bundle
+        run: |
+          mkdir -p public
+          cp dist/loop-ad-event-sdk.iife.js public/loop-ad-event-sdk.iife.js
+          cp dist/loop-ad-event-sdk.iife.js.map public/loop-ad-event-sdk.iife.js.map
+          printf '%s\n' \
+            '<!doctype html>' \
+            '<html lang="ko">' \
+            '  <head>' \
+            '    <meta charset="utf-8" />' \
+            '    <title>Loop Ad Event SDK</title>' \
+            '  </head>' \
+            '  <body>' \
+            '    <p>Loop Ad Event SDK browser bundle</p>' \
+            '    <script src="./loop-ad-event-sdk.iife.js"></script>' \
+            '  </body>' \
+            '</html>' \
+            > public/index.html
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload GitHub Pages artifact
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: public
+
+      - name: Deploy script bundle to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
