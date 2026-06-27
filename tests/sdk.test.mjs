@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, test } from "node:test";
-import { defaultEndpoint, init, version } from "../dist/index.mjs";
+import * as sdkModule from "../dist/index.mjs";
+
+const { init, version } = sdkModule;
 
 let requests;
 let listeners;
@@ -30,10 +32,21 @@ afterEach(() => {
 test("exports a small runtime API", () => {
     assert.equal(typeof init, "function");
     assert.equal(typeof version, "string");
-    assert.equal(defaultEndpoint, "https://ingest.dev.loop-ad.org");
+    assert.equal("defaultEndpoint" in sdkModule, false);
+    assert.equal("LoopAdEventPayload" in sdkModule, false);
+
+    activeSdk = init({ projectId: "demo-shoppingmall", autoTrackPageViews: false });
+
+    assert.equal(typeof activeSdk.track, "function");
+    assert.equal(typeof activeSdk.setIdentity, "function");
+    assert.equal(typeof activeSdk.clearIdentity, "function");
+    assert.equal(typeof activeSdk.destroy, "function");
+    assert.equal("pageView" in activeSdk, false);
+    assert.equal("identify" in activeSdk, false);
+    assert.equal("setContext" in activeSdk, false);
 });
 
-test("starts autocapture immediately but drops pre-identity events", () => {
+test("records the current page when identity becomes ready", () => {
     activeSdk = init({ projectId: "demo-shoppingmall" });
 
     assert.equal(requests.length, 0);
@@ -42,10 +55,6 @@ test("starts autocapture immediately but drops pre-identity events", () => {
         userId: "user-1",
         sessionId: "session-1"
     });
-
-    assert.equal(requests.length, 0);
-
-    activeSdk.pageView();
 
     assert.equal(requests.length, 1);
     assert.equal(requests[0].url, "https://ingest.dev.loop-ad.org/");
@@ -57,6 +66,22 @@ test("starts autocapture immediately but drops pre-identity events", () => {
     const properties = JSON.parse(requests[0].body.properties_json);
     assert.equal(properties.page.path, "/products/sku-1");
     assert.equal(properties.sdk.name, "loop-ad_event_sdk");
+});
+
+test("does not duplicate the current page for repeated identity updates", () => {
+    activeSdk = init({ projectId: "demo-shoppingmall" });
+
+    activeSdk.setIdentity({
+        userId: "user-1",
+        sessionId: "session-1"
+    });
+    activeSdk.setIdentity({
+        userId: "user-1",
+        sessionId: "session-1"
+    });
+
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].body.event_name, "page_view");
 });
 
 test("sends initial page_view immediately when identity is already known", () => {
@@ -118,10 +143,10 @@ test("maps manual product_view fields to snake_case payload fields", () => {
     assert.equal(properties.route_group, "product-detail");
 });
 
-test("identify is a compatibility alias for setting identity and context", () => {
+test("setIdentity can update shared context for later events", () => {
     activeSdk = init({ projectId: "demo-shoppingmall", autoTrackPageViews: false });
 
-    activeSdk.identify("user-42", "session-42", { ageGroup: "20s" });
+    activeSdk.setIdentity({ userId: "user-42", sessionId: "session-42" }, { ageGroup: "20s" });
     activeSdk.track("checkout_start", { quantity: 2 });
 
     assert.equal(requests[0].body.user_id, "user-42");

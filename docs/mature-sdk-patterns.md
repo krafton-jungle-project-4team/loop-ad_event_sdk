@@ -27,7 +27,7 @@
 
 | 구성요소 | 성숙한 SDK에서의 역할 | MVP 반영 |
 |---|---|---|
-| Public client | `track`, `identify`, `setUserId`, `setSessionId`, `reset` 같은 API를 제공 | `track`, `pageView`, `setIdentity`, `clearIdentity`, `identify` |
+| Public client | `track`, `identify`, `setUserId`, `setSessionId`, `reset` 같은 API를 제공 | `track`, `setIdentity`, `clearIdentity`, `destroy` |
 | Config normalization | SDK 시작 전에 endpoint, tracking 옵션, default 값을 확정 | `withDefaultInitOptions()` |
 | Identity manager | user id, anonymous id, session id를 분리 관리 | anonymous id를 만들지 않고 `Identity { userId, sessionId }`만 관리 |
 | Autocapture | document-level listener로 click/change/submit 등 수집 | `data-loopad-event` 기반 DOM event delegation |
@@ -68,15 +68,16 @@ sessions, form interactions, element interactions 같은 자동 수집 기능을
 켜고 끄는 판단을 분리합니다.
 
 MVP에서는 plugin 시스템은 만들지 않았습니다. 대신 `autoTrackPageViews`,
-`collectDomEvents`, `setIdentity`, `clearIdentity`처럼 작은 API로 자동 수집과
-identity gate를 제어합니다.
+`collectDomEvents`는 init option으로만 받고, runtime public API는 `track`,
+`setIdentity`, `clearIdentity`, `destroy`로 좁혔습니다.
 
 ## Loop Ad MVP 설계 결정
 
 1. SDK는 앱 부팅 시 바로 `init()` 가능하다.
 2. 기본값으로 identity 없이는 전송하지 않는다.
 3. 초기 auth 확인 중 발생한 이벤트는 메모리에 보관하지 않고 drop한다.
-4. `setIdentity({ userId, sessionId })`가 호출되면 이후 이벤트부터 전송한다.
+4. `setIdentity({ userId, sessionId })`가 identity를 처음 설정하면 현재 페이지를
+   `page_view`로 1회 전송한다.
 5. `clearIdentity()` 이후 identity 없는 이벤트는 다시 drop한다.
 6. DOM 자동 수집은 명시적으로 `data-loopad-event`가 붙은 요소만 대상으로 한다.
 7. input, textarea, select 값과 JWT/token은 SDK가 읽거나 전송하지 않는다.

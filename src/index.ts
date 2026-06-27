@@ -64,15 +64,13 @@ export interface InitOptions {
     projectId: string;
     endpoint?: string | null;
     identity?: Identity | null;
-    userId?: string | null;
-    sessionId?: string | null;
     debug?: boolean | null;
     autoTrackPageViews?: boolean | null;
     collectDomEvents?: boolean | null;
     context?: EventContext | null;
 }
 
-export interface LoopAdEventPayload {
+interface LoopAdEventPayload {
     project_id: string;
     event_id: string;
     user_id: string;
@@ -107,18 +105,13 @@ export interface LoopAdEventPayload {
 
 export interface LoopAdEventSdkClient {
     track(eventName: EventName, fields?: TrackFields): void;
-    pageView(fields?: TrackFields): void;
-    setIdentity(identity: Identity): void;
+    setIdentity(identity: Identity, context?: EventContext | null): void;
     clearIdentity(): void;
-    identify(userId: string, sessionId: string, context?: EventContext | null): void;
-    setContext(context: EventContext): void;
     destroy(): void;
 }
 
 export const version =
     typeof __SDK_VERSION__ === "string" ? __SDK_VERSION__ : "0.1.0";
-
-export const defaultEndpoint = "https://ingest.dev.loop-ad.org";
 
 export function init(options: InitOptions): LoopAdEventSdkClient {
     const initOptions = withDefaultInitOptions(options);
@@ -138,12 +131,9 @@ declare const __SDK_VERSION__: string | undefined;
 class Runtime {
     readonly client: LoopAdEventSdkClient = Object.freeze({
         track: (eventName: EventName, fields?: TrackFields) => this.track(eventName, fields),
-        pageView: (fields?: TrackFields) => this.track("page_view", fields),
-        setIdentity: (identity: Identity) => this.setIdentity(identity),
+        setIdentity: (identity: Identity, context?: EventContext | null) =>
+            this.setIdentity(identity, context),
         clearIdentity: () => this.clearIdentity(),
-        identify: (userId: string, sessionId: string, context?: EventContext | null) =>
-            this.identify(userId, sessionId, context),
-        setContext: (context: EventContext) => this.setContext(context),
         destroy: () => this.destroy()
     });
 
@@ -164,7 +154,9 @@ class Runtime {
 
         if (this.config.autoTrackPageViews) {
             this.patchHistory();
-            this.track("page_view");
+            if (this.config.identity) {
+                this.trackPageView();
+            }
         }
     }
 
@@ -274,15 +266,16 @@ class Runtime {
         }).catch((error) => warn(this.config.debug, "LoopAdEventSDK event send failed.", error));
     }
 
-    private setIdentity(identity: Identity): void {
+    private setIdentity(identity: Identity, context?: EventContext | null): void {
+        const hadIdentity = this.config.identity !== null;
         this.config.identity = normalizeIdentity(identity);
-    }
-
-    private identify(userId: string, sessionId: string, context?: EventContext | null): void {
-        this.setIdentity({ userId, sessionId });
 
         if (context) {
             this.setContext(context);
+        }
+
+        if (!hadIdentity && this.config.autoTrackPageViews) {
+            this.trackPageView();
         }
     }
 
@@ -361,8 +354,12 @@ class Runtime {
 
         const previousUrl = this.currentUrl;
         this.currentUrl = nextUrl;
-        this.track("page_view", {}, previousUrl);
+        this.trackPageView(previousUrl);
     };
+
+    private trackPageView(previousUrl?: string): void {
+        this.track("page_view", {}, previousUrl);
+    }
 
     private destroy(): void {
         if (this.destroyed) {
@@ -412,6 +409,7 @@ interface EventDraft {
 }
 
 const SDK_NAME = "loop-ad_event_sdk";
+const DEFAULT_ENDPOINT = "https://ingest.dev.loop-ad.org";
 const DOM_SELECTOR = "[data-loopad-event]";
 const DOM_EVENTS = ["click", "change", "submit"] as const;
 const TEXT_LIMIT_BYTES = 160;
@@ -446,14 +444,7 @@ function identityFromInit(options: InitOptions): Identity | null {
         return normalizeIdentity(options.identity);
     }
 
-    const userId = text(options.userId);
-    const sessionId = text(options.sessionId);
-
-    if (!userId && !sessionId) {
-        return null;
-    }
-
-    return normalizeIdentity({ userId: userId ?? "", sessionId: sessionId ?? "" });
+    return null;
 }
 
 function normalizeIdentity(identity: Identity): Identity {
@@ -496,7 +487,7 @@ function cleanContext(context: EventContext): EventContext {
 }
 
 function endpoint(value: string | null | undefined): string {
-    const candidate = text(value) ?? defaultEndpoint;
+    const candidate = text(value) ?? DEFAULT_ENDPOINT;
 
     try {
         const parsed = new URL(candidate);

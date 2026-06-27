@@ -5,7 +5,8 @@ Loop Ad Event SDK는 고객사 웹사이트 또는 데모 쇼핑몰 프론트엔
 
 SDK는 앱 시작 시 바로 붙일 수 있지만 `userId`와 `sessionId`가 준비되기 전에는
 Event Collector로 전송하지 않습니다. 로그인 이전 활동은 메모리에 보관하지 않고
-drop하며, `setIdentity()` 이후 발생한 이벤트만 전송합니다.
+drop하며, `setIdentity()`가 처음 identity를 설정하면 현재 페이지를 자동으로
+`page_view` 기록합니다.
 
 ## 참고한 계약
 
@@ -69,9 +70,6 @@ if (user) {
     userId: user.id,
     sessionId: user.session.id
   });
-
-  // 로그인 이후 현재 화면 page_view가 필요하면 앱이 명시적으로 호출합니다.
-  sdk.pageView();
 }
 ```
 
@@ -82,6 +80,8 @@ async function onSignupSuccess(result) {
   sdk.setIdentity({
     userId: result.user.id,
     sessionId: result.session.id
+  }, {
+    ageGroup: result.user.ageGroup
   });
 
   sdk.track("signup_completed");
@@ -197,15 +197,18 @@ sdk.track("product_view", { productId: "SKU-before-login" }); // dropped
 sdk.setIdentity({
   userId: "user-1",
   sessionId: "session-1"
-});
+}); // current page_view is sent once
 
 sdk.track("product_view", { productId: "SKU-after-login" }); // sent
 ```
 
 - `userId`, `sessionId` 없이는 이벤트를 전송하지 않는다.
 - 로그인 이전 활동은 SDK가 메모리에 보관하지 않는다.
-- `setIdentity()`: 이후 이벤트에 사용할 `userId`, `sessionId`를 설정한다.
+- `setIdentity()`: 이후 이벤트에 사용할 `userId`, `sessionId`를 설정하고 현재
+  페이지를 1회 자동 기록한다.
 - `clearIdentity()`: logout 후 identity 없는 이벤트를 다시 drop한다.
+- 예외적으로 page view를 직접 보내야 하면 별도 API 대신
+  `track("page_view")`를 사용한다.
 
 JWT, access token, refresh token은 SDK 옵션이나 이벤트 payload에 넣지 않습니다.
 
