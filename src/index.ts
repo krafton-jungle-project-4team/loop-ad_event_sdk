@@ -80,8 +80,9 @@ export interface TrackFields extends EventContext {
 /**
  * SDK 시작 옵션입니다.
  *
- * Event Collector ingest domain은 `loop-ad_infra`의 `service-endpoints.md`에
- * 고정된 값이므로 SDK 옵션으로 덮어쓸 수 없습니다.
+ * Event Collector public API domain은 `loop-ad_infra`의
+ * `app-repository-guide.md` Public API Domains 계약에 고정된 값이므로 SDK
+ * 옵션으로 덮어쓸 수 없습니다.
  */
 export interface InitOptions {
     projectId: string;
@@ -495,7 +496,7 @@ interface EventDraft {
 }
 
 const SDK_NAME = "loop-ad_event_sdk";
-const INGEST_ENDPOINT = "https://ingest.dev.loop-ad.org";
+const INGEST_ENDPOINT = "https://event.api.dev.loop-ad.org";
 const DOM_SELECTOR = "[data-loopad-event]";
 const DOM_EVENTS = ["click", "change", "submit"] as const;
 const TEXT_LIMIT_BYTES = 160;
@@ -505,8 +506,8 @@ let active: Runtime | null = null;
 /**
  * 시작 옵션을 완성된 runtime config로 정규화합니다.
  *
- * ingest domain은 application runtime 설정이 아니라 infra contract이므로 endpoint
- * 옵션은 의도적으로 받지 않습니다.
+ * Event Collector endpoint는 application runtime 설정이 아니라 infra contract이므로
+ * endpoint 옵션은 의도적으로 받지 않습니다.
  */
 function withDefaultInitOptions(options: InitOptions): DefaultInitOptions {
     const projectId = text(options?.projectId);
