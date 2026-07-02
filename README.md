@@ -13,8 +13,7 @@ drop하며, `setIdentity()`가 처음 identity를 설정하면 현재 페이지�
 - `loop-ad_infra/docs/app-repository-guide.md`: 앱 repo는 인프라를 직접 만들지
   않고 정해진 contract를 따르며, Event Collector public endpoint는 Public API
   Domains 계약에 따라 `https://event.api.dev.loop-ad.org`를 고정 사용한다.
-- ClickHouse `events` 테이블: 사용자 행동 로그와 추천/광고 reward 계산의 원천
-  이벤트를 저장한다.
+- ClickHouse `raw_events` 테이블: `hotel_rec_promo.v1` 원천 이벤트를 저장한다.
 
 ## 참고한 SDK 패턴
 
@@ -94,7 +93,7 @@ import { init } from "@krafton-jungle-project-4team/loop-ad_event_sdk";
 const sdk = init({
   projectId: "demo-shoppingmall",
   context: {
-    channel: "demo",
+    promotionChannel: "onsite_banner",
     device: "mobile"
   }
 });
@@ -121,7 +120,7 @@ async function onSignupSuccess(result) {
     userId: result.user.id,
     sessionId: result.session.id
   }, {
-    ageGroup: result.user.ageGroup
+    hotelMarket: result.lastSearchMarket
   });
 
   sdk.track("signup_completed");
@@ -149,7 +148,7 @@ sdk.clearIdentity();
 |---|---:|---|---|
 | `projectId` | yes | 없음 | Event Collector payload의 `project_id`로 들어가는 서비스 식별자 |
 | `identity` | no | `null` | 앱 시작 시 이미 로그인 상태를 알고 있을 때 전달하는 `{ userId, sessionId }` |
-| `context` | no | `{}` | 이후 이벤트에 공통으로 붙일 channel, device, campaign 등 flat context |
+| `context` | no | `{}` | 이후 이벤트의 `properties_json`에 공통으로 붙일 promotion, hotel, device 등 domain context |
 | `debug` | no | `false` | drop, send fail 같은 SDK 내부 경고를 console에 출력 |
 | `autoTrackPageViews` | no | `true` | init identity 또는 최초 `setIdentity()` 시 현재 페이지를 기록하고 SPA URL 변경을 추적 |
 | `collectDomEvents` | no | `true` | `data-loopad-event`가 붙은 DOM event를 document delegation으로 수집 |
@@ -187,14 +186,16 @@ Loop Ad 분석과 추천 파이프라인에서는 아래 표준 이벤트명을 
 
 ```text
 page_view
-product_view
-add_to_cart
-checkout_start
-purchase
-ad_impression
-ad_click
-coupon_issued
-coupon_used
+promotion_impression
+promotion_click
+campaign_redirect_click
+campaign_landing
+hotel_search
+hotel_click
+hotel_detail_view
+booking_start
+booking_complete
+booking_cancel
 ```
 
 고객사 서비스에서 필요한 커스텀 이벤트도 전송할 수 있습니다.
@@ -214,53 +215,60 @@ sdk.track("banner_hovered", { campaignId: "summer-2026" });
 
 ```html
 <button
-  data-loopad-event="add_to_cart"
-  data-loopad-product-id="GGOEGCBD142299"
-  data-loopad-category="Home/Eco-Friendly"
-  data-loopad-price="12900"
-  data-loopad-quantity="1"
+  data-loopad-event="promotion_click"
+  data-loopad-campaign-id="camp_summer_2026"
+  data-loopad-promotion-id="promo_banner_001"
+  data-loopad-promotion-run-id="run_banner_001"
+  data-loopad-ad-experiment-id="ad_exp_banner_001"
+  data-loopad-segment-id="seg_repeat_hotel"
+  data-loopad-content-id="content_banner_001"
+  data-loopad-content-option-id="option_a"
+  data-loopad-promotion-channel="onsite_banner"
+  data-loopad-hotel-id="hotel_123"
+  data-loopad-hotel-cluster="seoul_family"
 >
-  Add to cart
+  View hotel deal
 </button>
 ```
 
 지원 attribute 예시:
 
 ```text
-data-loopad-channel
 data-loopad-campaign-id
-data-loopad-age-group
-data-loopad-gender
+data-loopad-promotion-id
+data-loopad-promotion-run-id
+data-loopad-ad-experiment-id
+data-loopad-promotion-channel
+data-loopad-segment-id
+data-loopad-content-id
+data-loopad-content-option-id
+data-loopad-placement-id
+data-loopad-landing-type
+data-loopad-hotel-id
+data-loopad-hotel-cluster
+data-loopad-hotel-market
+data-loopad-hotel-city
+data-loopad-hotel-country
+data-loopad-checkin-date
+data-loopad-checkout-date
+data-loopad-adult-count
+data-loopad-child-count
+data-loopad-room-price
+data-loopad-booking-id
+data-loopad-booking-value
+data-loopad-currency
 data-loopad-device
-data-loopad-category
-data-loopad-product-id
-data-loopad-inventory-status
-data-loopad-price
-data-loopad-quantity
-data-loopad-revenue
-data-loopad-coupon-id
-data-loopad-order-id
-data-loopad-experiment-id
-data-loopad-variant-id
-data-loopad-action-id
-data-loopad-mapping-id
-data-loopad-ad-id
-data-loopad-creative-id
-data-loopad-bandit-policy-id
-data-loopad-bandit-arm-id
-data-loopad-bandit-decision-id
-data-loopad-reward-value
 ```
 
 추가 속성은 `data-loopad-prop-*`로 보낼 수 있습니다.
 
 ```html
 <button
-  data-loopad-event="coupon_issued"
-  data-loopad-coupon-id="WELCOME10"
+  data-loopad-event="promotion_impression"
+  data-loopad-campaign-id="camp_summer_2026"
   data-loopad-prop-slot="main_banner"
 >
-  Issue coupon
+  Summer deal
 </button>
 ```
 
@@ -277,7 +285,7 @@ input radio       -> change
 다른 browser event를 듣고 싶으면 `data-loopad-listen`을 명시합니다.
 
 ```html
-<form data-loopad-event="checkout_start" data-loopad-listen="submit">
+<form data-loopad-event="booking_start" data-loopad-listen="submit">
   ...
 </form>
 ```
@@ -285,7 +293,7 @@ input radio       -> change
 SDK는 버튼 텍스트를 기본 수집하지 않습니다. 필요할 때만 아래처럼 명시합니다.
 
 ```html
-<button data-loopad-event="ad_click" data-loopad-label="hero_cta">
+<button data-loopad-event="promotion_click" data-loopad-label="hero_cta">
   Start
 </button>
 ```
@@ -297,14 +305,14 @@ SDK는 버튼 텍스트를 기본 수집하지 않습니다. 필요할 때만 �
 ```js
 const sdk = init({ projectId: "demo-shoppingmall" });
 
-sdk.track("product_view", { productId: "SKU-before-login" }); // dropped
+sdk.track("hotel_detail_view", { hotelId: "hotel-before-login" }); // dropped
 
 sdk.setIdentity({
   userId: "user-1",
   sessionId: "session-1"
 }); // current page_view is sent once
 
-sdk.track("product_view", { productId: "SKU-after-login" }); // sent
+sdk.track("hotel_detail_view", { hotelId: "hotel-after-login" }); // sent
 ```
 
 - `userId`, `sessionId` 없이는 이벤트를 전송하지 않는다.
@@ -320,45 +328,25 @@ SDK는 anonymous id를 만들지 않습니다.
 
 ## Payload 형식
 
-SDK는 Event Collector로 아래처럼 ClickHouse `events` 컬럼에 맞춘 flat JSON을
+SDK는 Event Collector로 아래처럼 `hotel_rec_promo.v1` common envelope JSON을
 전송합니다. 요청 도메인은 `loop-ad_infra/docs/app-repository-guide.md`의 Public
 API Domains 계약에 따라 `https://event.api.dev.loop-ad.org`로 고정합니다.
 
 `properties_json`에는 기본적으로 page 정보와 SDK 정보가 들어가며, DOM 수집 시
-element metadata와 `data-loopad-prop-*` 값이 함께 들어갑니다.
+promotion/hotel domain 값, element metadata, `data-loopad-prop-*` 값이 함께
+들어갑니다.
 
 ```json
 {
   "project_id": "demo-shoppingmall",
+  "schema_version": "hotel_rec_promo.v1",
   "event_id": "evt_...",
+  "event_name": "hotel_detail_view",
+  "event_time": "2026-06-27T10:00:00.000Z",
+  "source": "browser_sdk",
   "user_id": "user-123",
   "session_id": "session-123",
-  "event_time": "2026-06-27T10:00:00.000Z",
-  "event_name": "product_view",
-  "channel": "demo",
-  "campaign_id": "",
-  "age_group": "",
-  "gender": "",
-  "device": "mobile",
-  "category": "Home/Eco-Friendly",
-  "product_id": "GGOEGCBD142299",
-  "inventory_status": "in_stock",
-  "price": 12900,
-  "quantity": 0,
-  "revenue": 0,
-  "coupon_id": "",
-  "order_id": "",
-  "experiment_id": "",
-  "variant_id": "",
-  "action_id": "",
-  "mapping_id": "",
-  "ad_id": "",
-  "creative_id": "",
-  "bandit_policy_id": "",
-  "bandit_arm_id": "",
-  "bandit_decision_id": "",
-  "reward_value": 0,
-  "properties_json": "{\"page\":...,\"sdk\":...}"
+  "properties_json": "{\"campaign_id\":\"camp_summer_2026\",\"hotel_cluster\":\"seoul_family\",\"page\":...,\"sdk\":...}"
 }
 ```
 
