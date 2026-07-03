@@ -22,36 +22,37 @@ export interface EventProperties {
 }
 
 /**
- * ClickHouse `events` flat column으로 매핑되는 공통 이벤트 context입니다.
+ * ClickHouse `raw_events.properties_json`으로 들어가는 공통 이벤트 context입니다.
  *
  * `init({ context })`는 기본값을 제공하고, `setIdentity(identity, context)`는
  * 로그인 이후 공유 context를 갱신할 수 있으며, `track(name, fields)`는 단일 이벤트의
  * 값을 덮어쓸 수 있습니다.
  */
 export interface EventContext {
-    channel?: string | null;
     campaignId?: string | null;
-    ageGroup?: string | null;
-    gender?: string | null;
+    promotionId?: string | null;
+    promotionRunId?: string | null;
+    adExperimentId?: string | null;
+    promotionChannel?: string | null;
+    segmentId?: string | null;
+    contentId?: string | null;
+    contentOptionId?: string | null;
+    placementId?: string | null;
+    landingType?: string | null;
+    hotelId?: string | null;
+    hotelCluster?: string | null;
+    hotelMarket?: string | null;
+    hotelCity?: string | null;
+    hotelCountry?: string | null;
+    checkinDate?: string | null;
+    checkoutDate?: string | null;
+    adultCount?: number | string | null;
+    childCount?: number | string | null;
+    roomPrice?: number | string | null;
+    bookingId?: string | null;
+    bookingValue?: number | string | null;
+    currency?: string | null;
     device?: string | null;
-    category?: string | null;
-    productId?: string | null;
-    inventoryStatus?: string | null;
-    price?: number | null;
-    quantity?: number | null;
-    revenue?: number | null;
-    couponId?: string | null;
-    orderId?: string | null;
-    experimentId?: string | null;
-    variantId?: string | null;
-    actionId?: string | null;
-    mappingId?: string | null;
-    adId?: string | null;
-    creativeId?: string | null;
-    banditPolicyId?: string | null;
-    banditArmId?: string | null;
-    banditDecisionId?: string | null;
-    rewardValue?: number | null;
 }
 
 /**
@@ -68,7 +69,7 @@ export interface Identity {
 /**
  * `track()`이 받는 이벤트별 필드입니다.
  *
- * 이벤트명은 일반 문자열입니다. 문서에서는 `product_view` 같은 표준 이름을
+ * 이벤트명은 일반 문자열입니다. 문서에서는 `hotel_detail_view` 같은 표준 이름을
  * 권장하지만, custom event name도 의도적으로 허용합니다.
  */
 export interface TrackFields extends EventContext {
@@ -95,34 +96,13 @@ export interface InitOptions {
 
 interface LoopAdEventPayload {
     project_id: string;
+    schema_version: "hotel_rec_promo.v1";
     event_id: string;
+    event_name: string;
+    event_time: string;
+    source: "browser_sdk";
     user_id: string;
     session_id: string;
-    event_time: string;
-    event_name: string;
-    channel: string;
-    campaign_id: string;
-    age_group: string;
-    gender: string;
-    device: string;
-    category: string;
-    product_id: string;
-    inventory_status: string;
-    price: number;
-    quantity: number;
-    revenue: number;
-    coupon_id: string;
-    order_id: string;
-    experiment_id: string;
-    variant_id: string;
-    action_id: string;
-    mapping_id: string;
-    ad_id: string;
-    creative_id: string;
-    bandit_policy_id: string;
-    bandit_arm_id: string;
-    bandit_decision_id: string;
-    reward_value: number;
     properties_json: string;
 }
 
@@ -267,6 +247,7 @@ class Runtime {
         elementInfo?: { [key: string]: EventPropertyValue }
     ): EventDraft {
         const properties: EventProperties = {
+            ...propertiesFromContext(cleanContext({ ...this.config.context, ...fields })),
             ...(fields.properties ?? {}),
             page: page(previousUrl),
             sdk: { name: SDK_NAME, version }
@@ -280,45 +261,21 @@ class Runtime {
             eventName,
             eventId: text(fields.eventId) ?? id("evt"),
             eventTime: eventTime(fields.eventTime),
-            context: cleanContext({ ...this.config.context, ...fields }),
             properties
         };
     }
 
     /** 내부 draft를 ClickHouse 형태의 collector payload로 변환합니다. */
     private payload(draft: EventDraft, identity: Identity): LoopAdEventPayload {
-        const context = draft.context;
-
         return {
             project_id: this.config.projectId,
+            schema_version: SCHEMA_VERSION,
             event_id: draft.eventId,
+            event_name: draft.eventName,
+            event_time: draft.eventTime,
+            source: SOURCE,
             user_id: identity.userId,
             session_id: identity.sessionId,
-            event_time: draft.eventTime,
-            event_name: draft.eventName,
-            channel: text(context.channel) ?? "",
-            campaign_id: text(context.campaignId) ?? "",
-            age_group: text(context.ageGroup) ?? "",
-            gender: text(context.gender) ?? "",
-            device: text(context.device) ?? "",
-            category: text(context.category) ?? "",
-            product_id: text(context.productId) ?? "",
-            inventory_status: text(context.inventoryStatus) ?? "",
-            price: money(context.price),
-            quantity: quantity(context.quantity),
-            revenue: money(context.revenue),
-            coupon_id: text(context.couponId) ?? "",
-            order_id: text(context.orderId) ?? "",
-            experiment_id: text(context.experimentId) ?? "",
-            variant_id: text(context.variantId) ?? "",
-            action_id: text(context.actionId) ?? "",
-            mapping_id: text(context.mappingId) ?? "",
-            ad_id: text(context.adId) ?? "",
-            creative_id: text(context.creativeId) ?? "",
-            bandit_policy_id: text(context.banditPolicyId) ?? "",
-            bandit_arm_id: text(context.banditArmId) ?? "",
-            bandit_decision_id: text(context.banditDecisionId) ?? "",
-            reward_value: numberOrZero(context.rewardValue),
             properties_json: serialize(draft.properties)
         };
     }
@@ -491,11 +448,12 @@ interface EventDraft {
     eventName: string;
     eventId: string;
     eventTime: string;
-    context: EventContext;
     properties: EventProperties;
 }
 
 const SDK_NAME = "loop-ad_event_sdk";
+const SCHEMA_VERSION = "hotel_rec_promo.v1";
+const SOURCE = "browser_sdk";
 const INGEST_ENDPOINT = "https://event.api.dev.loop-ad.org";
 const DOM_SELECTOR = "[data-loopad-event]";
 const DOM_EVENTS = ["click", "change", "submit"] as const;
@@ -559,30 +517,68 @@ function normalizeIdentity(identity: Identity): Identity {
 // https://github.com/amplitude/Amplitude-TypeScript/blob/main/packages/analytics-core/src/core-client.ts
 function cleanContext(context: EventContext): EventContext {
     return {
-        channel: text(context.channel) ?? null,
         campaignId: text(context.campaignId) ?? null,
-        ageGroup: text(context.ageGroup) ?? null,
-        gender: text(context.gender) ?? null,
+        promotionId: text(context.promotionId) ?? null,
+        promotionRunId: text(context.promotionRunId) ?? null,
+        adExperimentId: text(context.adExperimentId) ?? null,
+        promotionChannel: text(context.promotionChannel) ?? null,
+        segmentId: text(context.segmentId) ?? null,
+        contentId: text(context.contentId) ?? null,
+        contentOptionId: text(context.contentOptionId) ?? null,
+        placementId: text(context.placementId) ?? null,
+        landingType: text(context.landingType) ?? null,
+        hotelId: text(context.hotelId) ?? null,
+        hotelCluster: text(context.hotelCluster) ?? null,
+        hotelMarket: text(context.hotelMarket) ?? null,
+        hotelCity: text(context.hotelCity) ?? null,
+        hotelCountry: text(context.hotelCountry) ?? null,
+        checkinDate: text(context.checkinDate) ?? null,
+        checkoutDate: text(context.checkoutDate) ?? null,
+        adultCount: integerText(context.adultCount) ?? null,
+        childCount: integerText(context.childCount) ?? null,
+        roomPrice: decimalText(context.roomPrice) ?? null,
+        bookingId: text(context.bookingId) ?? null,
+        bookingValue: decimalText(context.bookingValue) ?? null,
+        currency: text(context.currency) ?? null,
         device: text(context.device) ?? null,
-        category: text(context.category) ?? null,
-        productId: text(context.productId) ?? null,
-        inventoryStatus: text(context.inventoryStatus) ?? null,
-        price: numberOrNull(context.price),
-        quantity: numberOrNull(context.quantity),
-        revenue: numberOrNull(context.revenue),
-        couponId: text(context.couponId) ?? null,
-        orderId: text(context.orderId) ?? null,
-        experimentId: text(context.experimentId) ?? null,
-        variantId: text(context.variantId) ?? null,
-        actionId: text(context.actionId) ?? null,
-        mappingId: text(context.mappingId) ?? null,
-        adId: text(context.adId) ?? null,
-        creativeId: text(context.creativeId) ?? null,
-        banditPolicyId: text(context.banditPolicyId) ?? null,
-        banditArmId: text(context.banditArmId) ?? null,
-        banditDecisionId: text(context.banditDecisionId) ?? null,
-        rewardValue: numberOrNull(context.rewardValue)
     };
+}
+
+function propertiesFromContext(context: EventContext): EventProperties {
+    const properties: EventProperties = {};
+
+    setProperty(properties, "campaign_id", context.campaignId);
+    setProperty(properties, "promotion_id", context.promotionId);
+    setProperty(properties, "promotion_run_id", context.promotionRunId);
+    setProperty(properties, "ad_experiment_id", context.adExperimentId);
+    setProperty(properties, "promotion_channel", context.promotionChannel);
+    setProperty(properties, "segment_id", context.segmentId);
+    setProperty(properties, "content_id", context.contentId);
+    setProperty(properties, "content_option_id", context.contentOptionId);
+    setProperty(properties, "placement_id", context.placementId);
+    setProperty(properties, "landing_type", context.landingType);
+    setProperty(properties, "hotel_id", context.hotelId);
+    setProperty(properties, "hotel_cluster", context.hotelCluster);
+    setProperty(properties, "hotel_market", context.hotelMarket);
+    setProperty(properties, "hotel_city", context.hotelCity);
+    setProperty(properties, "hotel_country", context.hotelCountry);
+    setProperty(properties, "checkin_date", context.checkinDate);
+    setProperty(properties, "checkout_date", context.checkoutDate);
+    setProperty(properties, "adult_count", context.adultCount);
+    setProperty(properties, "child_count", context.childCount);
+    setProperty(properties, "room_price", context.roomPrice);
+    setProperty(properties, "booking_id", context.bookingId);
+    setProperty(properties, "booking_value", context.bookingValue);
+    setProperty(properties, "currency", context.currency);
+    setProperty(properties, "device", context.device);
+
+    return properties;
+}
+
+function setProperty(properties: EventProperties, key: string, value: EventPropertyValue | undefined): void {
+    if (value !== null && value !== undefined && value !== "") {
+        properties[key] = value;
+    }
 }
 
 // 참고: PostHog autocapture는 allowlist된 DOM metadata만 추출하고 기본적으로
@@ -748,29 +744,6 @@ function text(value: unknown): string | undefined {
     return normalized || undefined;
 }
 
-// 참고: currency.js는 금액을 precision-normalized finite number로 다룹니다.
-// SDK도 ClickHouse price/revenue 값을 숫자로 유지하고 cent 단위로 반올림합니다.
-// https://github.com/scurker/currency.js/blob/main/src/currency.js
-function money(value: unknown): number {
-    const normalized = numberOrZero(value);
-    return Math.round(normalized * 100) / 100;
-}
-
-// 참고: accounting.js/currency.js는 formatted money output에 NaN/Infinity가 새지 않게
-// 방어합니다. quantity도 같은 finite-number guard 경로를 사용합니다.
-// https://github.com/openexchangerates/accounting.js/blob/master/accounting.js
-function quantity(value: unknown): number {
-    return Math.max(0, Math.trunc(numberOrZero(value)));
-}
-
-// 참고: accounting.js는 unformat/toFixed 경로에서 잘못된 numeric input을 안전한
-// fallback으로 정규화합니다. 이 함수도 payload field를 ClickHouse 친화적으로 유지합니다.
-// https://github.com/openexchangerates/accounting.js/blob/master/accounting.js
-function numberOrZero(value: unknown): number {
-    const normalized = numberOrNull(value);
-    return normalized ?? 0;
-}
-
 // 참고: currency.js는 precision 처리 전에 외부 값을 parse하고 invalid number를
 // 거릅니다. 이 helper는 SDK의 numeric gate입니다.
 // https://github.com/scurker/currency.js/blob/main/src/currency.js
@@ -781,6 +754,18 @@ function numberOrNull(value: unknown): number | null {
 
     const normalized = typeof value === "number" ? value : Number(value);
     return Number.isFinite(normalized) ? normalized : null;
+}
+
+function integerText(value: unknown): string | undefined {
+    const normalized = numberOrNull(value);
+    if (normalized === null) return undefined;
+    return String(Math.max(0, Math.trunc(normalized)));
+}
+
+function decimalText(value: unknown): string | undefined {
+    const normalized = numberOrNull(value);
+    if (normalized === null) return undefined;
+    return String(Math.round(normalized * 100) / 100);
 }
 
 // 참고: PostHog autocapture는 DOM attribute를 읽기 전에 EventTarget/Element 형태를
@@ -861,44 +846,46 @@ function warn(debug: boolean, message: string, ...details: unknown[]): void {
 }
 
 /**
- * DOM autocapture에서 문자열 context로 읽을 `data-loopad-*` attribute 매핑입니다.
+ * DOM autocapture에서 문자열 property로 읽을 `data-loopad-*` attribute 매핑입니다.
  *
  * 각 tuple은 `[TrackFields key, HTML attribute name]` 형태입니다.
  * `fieldsFromElement()`가 이 표를 순회해 명시적으로 붙은 attribute만 읽고,
  * 값이 비어 있지 않을 때만 event fields에 복사합니다.
  */
 const TEXT_ATTRIBUTES = [
-    ["channel", "data-loopad-channel"],
     ["campaignId", "data-loopad-campaign-id"],
-    ["ageGroup", "data-loopad-age-group"],
-    ["gender", "data-loopad-gender"],
-    ["device", "data-loopad-device"],
-    ["category", "data-loopad-category"],
-    ["productId", "data-loopad-product-id"],
-    ["inventoryStatus", "data-loopad-inventory-status"],
-    ["couponId", "data-loopad-coupon-id"],
-    ["orderId", "data-loopad-order-id"],
-    ["experimentId", "data-loopad-experiment-id"],
-    ["variantId", "data-loopad-variant-id"],
-    ["actionId", "data-loopad-action-id"],
-    ["mappingId", "data-loopad-mapping-id"],
-    ["adId", "data-loopad-ad-id"],
-    ["creativeId", "data-loopad-creative-id"],
-    ["banditPolicyId", "data-loopad-bandit-policy-id"],
-    ["banditArmId", "data-loopad-bandit-arm-id"],
-    ["banditDecisionId", "data-loopad-bandit-decision-id"]
+    ["promotionId", "data-loopad-promotion-id"],
+    ["promotionRunId", "data-loopad-promotion-run-id"],
+    ["adExperimentId", "data-loopad-ad-experiment-id"],
+    ["promotionChannel", "data-loopad-promotion-channel"],
+    ["segmentId", "data-loopad-segment-id"],
+    ["contentId", "data-loopad-content-id"],
+    ["contentOptionId", "data-loopad-content-option-id"],
+    ["placementId", "data-loopad-placement-id"],
+    ["landingType", "data-loopad-landing-type"],
+    ["hotelId", "data-loopad-hotel-id"],
+    ["hotelCluster", "data-loopad-hotel-cluster"],
+    ["hotelMarket", "data-loopad-hotel-market"],
+    ["hotelCity", "data-loopad-hotel-city"],
+    ["hotelCountry", "data-loopad-hotel-country"],
+    ["checkinDate", "data-loopad-checkin-date"],
+    ["checkoutDate", "data-loopad-checkout-date"],
+    ["bookingId", "data-loopad-booking-id"],
+    ["currency", "data-loopad-currency"],
+    ["device", "data-loopad-device"]
 ] as const;
 
 /**
- * DOM autocapture에서 숫자로 해석할 `data-loopad-*` attribute 매핑입니다.
+ * DOM autocapture에서 숫자로 해석한 뒤 문자열 property로 보관할 `data-loopad-*`
+ * attribute 매핑입니다.
  *
  * 숫자 field는 `numberOrNull()`을 통과한 finite number만 event fields에 들어갑니다.
- * 이후 payload 생성 시 `price`와 `revenue`는 `money()`로, `quantity`는 `quantity()`로
- * 다시 정규화되어 ClickHouse에 안전한 숫자로 전송됩니다.
+ * 이후 payload 생성 시 ClickHouse `JSONExtractString` 기반 view와 맞도록
+ * `properties_json` 안에 문자열 값으로 정규화됩니다.
  */
 const NUMBER_ATTRIBUTES = [
-    ["price", "data-loopad-price"],
-    ["quantity", "data-loopad-quantity"],
-    ["revenue", "data-loopad-revenue"],
-    ["rewardValue", "data-loopad-reward-value"]
+    ["adultCount", "data-loopad-adult-count"],
+    ["childCount", "data-loopad-child-count"],
+    ["roomPrice", "data-loopad-room-price"],
+    ["bookingValue", "data-loopad-booking-value"]
 ] as const;
