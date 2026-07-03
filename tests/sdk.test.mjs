@@ -34,7 +34,11 @@ test("exports a small runtime API", () => {
     assert.equal(typeof version, "string");
     assert.equal("defaultEndpoint" in sdkModule, false);
 
-    activeSdk = init({ projectId: "demo-shoppingmall", autoTrackPageViews: false });
+    activeSdk = init({
+        projectId: "demo-shoppingmall",
+        writeKey: "write-key-demo",
+        autoTrackPageViews: false
+    });
 
     assert.equal(typeof activeSdk.track, "function");
     assert.equal(typeof activeSdk.setIdentity, "function");
@@ -46,7 +50,7 @@ test("exports a small runtime API", () => {
 });
 
 test("records the current page when identity becomes ready", () => {
-    activeSdk = init({ projectId: "demo-shoppingmall" });
+    activeSdk = init({ projectId: "demo-shoppingmall", writeKey: "write-key-demo" });
 
     assert.equal(requests.length, 0);
 
@@ -58,18 +62,20 @@ test("records the current page when identity becomes ready", () => {
     assert.equal(requests.length, 1);
     assert.equal(requests[0].url, "https://event.api.dev.loop-ad.org");
     assert.equal(requests[0].body.project_id, "demo-shoppingmall");
+    assert.equal(requests[0].body.write_key, "write-key-demo");
     assertCanonicalEnvelope(requests[0].body);
     assert.equal(requests[0].body.event_name, "page_view");
     assert.equal(requests[0].body.user_id, "user-1");
     assert.equal(requests[0].body.session_id, "session-1");
 
     const properties = JSON.parse(requests[0].body.properties_json);
+    assert.equal(properties.page_path, "/products/sku-1");
     assert.equal(properties.page.path, "/products/sku-1");
     assert.equal(properties.sdk.name, "loop-ad_event_sdk");
 });
 
 test("does not duplicate the current page for repeated identity updates", () => {
-    activeSdk = init({ projectId: "demo-shoppingmall" });
+    activeSdk = init({ projectId: "demo-shoppingmall", writeKey: "write-key-demo" });
 
     activeSdk.setIdentity({
         userId: "user-1",
@@ -87,6 +93,7 @@ test("does not duplicate the current page for repeated identity updates", () => 
 test("sends initial page_view immediately when identity is already known", () => {
     activeSdk = init({
         projectId: "demo-shoppingmall",
+        writeKey: "write-key-demo",
         identity: {
             userId: "user-1",
             sessionId: "session-1"
@@ -102,6 +109,7 @@ test("sends initial page_view immediately when identity is already known", () =>
 test("maps manual hotel event fields into properties_json", () => {
     activeSdk = init({
         projectId: "demo-shoppingmall",
+        writeKey: "write-key-demo",
         // The event-collector host is fixed by loop-ad_infra app-repository-guide.md.
         // Runtime JS callers may pass an endpoint field, but the SDK ignores it.
         endpoint: "http://localhost:8080/events",
@@ -125,15 +133,18 @@ test("maps manual hotel event fields into properties_json", () => {
         eventId: "event-1",
         eventTime: "2026-06-27T10:00:00.000+09:00",
         hotelId: "hotel-123",
-        hotelCluster: "seoul-family",
-        hotelMarket: "seoul",
+        hotelCluster: "42",
+        hotelMarket: "1001",
         hotelCity: "Seoul",
         hotelCountry: "KR",
         checkinDate: "2026-08-01",
         checkoutDate: "2026-08-03",
         adultCount: 2,
         childCount: 1,
-        roomPrice: 129000,
+        price: 129000,
+        breakfastIncluded: true,
+        freeCancellation: false,
+        roomType: "deluxe",
         currency: "KRW",
         properties: { route_group: "hotel-detail" }
     });
@@ -154,11 +165,14 @@ test("maps manual hotel event fields into properties_json", () => {
     assert.equal(properties.segment_id, "seg-repeat-hotel");
     assert.equal(properties.promotion_channel, "onsite_banner");
     assert.equal(properties.hotel_id, "hotel-123");
-    assert.equal(properties.hotel_cluster, "seoul-family");
-    assert.equal(properties.hotel_market, "seoul");
+    assert.equal(properties.hotel_cluster, "42");
+    assert.equal(properties.hotel_market, "1001");
     assert.equal(properties.adult_count, "2");
     assert.equal(properties.child_count, "1");
-    assert.equal(properties.room_price, "129000");
+    assert.equal(properties.price, "129000");
+    assert.equal(properties.breakfast_included, "1");
+    assert.equal(properties.free_cancellation, "0");
+    assert.equal(properties.room_type, "deluxe");
     assert.equal(properties.currency, "KRW");
     assert.equal(properties.device, "mobile");
     assert.equal(properties.route_group, "hotel-detail");
@@ -167,6 +181,7 @@ test("maps manual hotel event fields into properties_json", () => {
 test("sends custom string event names", () => {
     activeSdk = init({
         projectId: "demo-shoppingmall",
+        writeKey: "write-key-demo",
         autoTrackPageViews: false,
         identity: {
             userId: "user-1",
@@ -189,7 +204,11 @@ test("sends custom string event names", () => {
 });
 
 test("setIdentity can update shared context for later events", () => {
-    activeSdk = init({ projectId: "demo-shoppingmall", autoTrackPageViews: false });
+    activeSdk = init({
+        projectId: "demo-shoppingmall",
+        writeKey: "write-key-demo",
+        autoTrackPageViews: false
+    });
 
     activeSdk.setIdentity({ userId: "user-42", sessionId: "session-42" }, { hotelMarket: "busan" });
     activeSdk.track("hotel_click", { hotelId: "hotel-42" });
@@ -204,7 +223,11 @@ test("setIdentity can update shared context for later events", () => {
 });
 
 test("collects annotated DOM events without reading form input values", () => {
-    activeSdk = init({ projectId: "demo-shoppingmall", autoTrackPageViews: false });
+    activeSdk = init({
+        projectId: "demo-shoppingmall",
+        writeKey: "write-key-demo",
+        autoTrackPageViews: false
+    });
 
     const button = new FakeElement("button", {
         "data-loopad-event": "promotion_click",
@@ -217,9 +240,12 @@ test("collects annotated DOM events without reading form input values", () => {
         "data-loopad-content-option-id": "option-a",
         "data-loopad-promotion-channel": "onsite_banner",
         "data-loopad-hotel-id": "hotel-123",
-        "data-loopad-hotel-cluster": "seoul-family",
-        "data-loopad-hotel-market": "seoul",
-        "data-loopad-room-price": "59000",
+        "data-loopad-hotel-cluster": "42",
+        "data-loopad-hotel-market": "1001",
+        "data-loopad-price": "59000",
+        "data-loopad-breakfast-included": "true",
+        "data-loopad-free-cancellation": "false",
+        "data-loopad-room-type": "standard",
         "data-loopad-currency": "KRW",
         "data-loopad-prop-slot": "main"
     });
@@ -251,9 +277,12 @@ test("collects annotated DOM events without reading form input values", () => {
     assert.equal(properties.content_option_id, "option-a");
     assert.equal(properties.promotion_channel, "onsite_banner");
     assert.equal(properties.hotel_id, "hotel-123");
-    assert.equal(properties.hotel_cluster, "seoul-family");
-    assert.equal(properties.hotel_market, "seoul");
-    assert.equal(properties.room_price, "59000");
+    assert.equal(properties.hotel_cluster, "42");
+    assert.equal(properties.hotel_market, "1001");
+    assert.equal(properties.price, "59000");
+    assert.equal(properties.breakfast_included, "1");
+    assert.equal(properties.free_cancellation, "0");
+    assert.equal(properties.room_type, "standard");
     assert.equal(properties.currency, "KRW");
     assert.equal(properties.slot, "main");
     assert.equal(properties.element.tag, "button");
@@ -263,6 +292,7 @@ test("collects annotated DOM events without reading form input values", () => {
 test("tracks SPA navigation through history patching after identity is ready", () => {
     activeSdk = init({
         projectId: "demo-shoppingmall",
+        writeKey: "write-key-demo",
         identity: {
             userId: "user-1",
             sessionId: "session-1"
@@ -277,6 +307,7 @@ test("tracks SPA navigation through history patching after identity is ready", (
     assertCanonicalEnvelope(requests[0].body);
 
     const properties = JSON.parse(requests[0].body.properties_json);
+    assert.equal(properties.page_path, "/checkout");
     assert.equal(properties.page.path, "/checkout");
     assert.equal(
         properties.page.previous_url,
@@ -285,7 +316,11 @@ test("tracks SPA navigation through history patching after identity is ready", (
 });
 
 test("clearIdentity keeps logged-out work from attaching to a future login", () => {
-    activeSdk = init({ projectId: "demo-shoppingmall", autoTrackPageViews: false });
+    activeSdk = init({
+        projectId: "demo-shoppingmall",
+        writeKey: "write-key-demo",
+        autoTrackPageViews: false
+    });
 
     activeSdk.track("hotel_detail_view", { hotelId: "hotel-before-login" });
     activeSdk.clearIdentity();
@@ -316,7 +351,8 @@ function assertCanonicalEnvelope(body) {
         "schema_version",
         "session_id",
         "source",
-        "user_id"
+        "user_id",
+        "write_key"
     ].sort());
     assert.equal(body.schema_version, "hotel_rec_promo.v1");
     assert.equal(body.source, "browser_sdk");

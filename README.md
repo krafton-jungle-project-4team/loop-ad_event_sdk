@@ -92,6 +92,7 @@ import { init } from "@krafton-jungle-project-4team/loop-ad_event_sdk";
 
 const sdk = init({
   projectId: "demo-shoppingmall",
+  writeKey: "public_write_key",
   context: {
     promotionChannel: "onsite_banner",
     device: "mobile"
@@ -147,6 +148,7 @@ sdk.clearIdentity();
 | option | 필수 | 기본값 | 설명 |
 |---|---:|---|---|
 | `projectId` | yes | 없음 | Event Collector payload의 `project_id`로 들어가는 서비스 식별자 |
+| `writeKey` | yes | 없음 | Event Collector payload의 `write_key`로 들어가는 public 수집 키 |
 | `identity` | no | `null` | 앱 시작 시 이미 로그인 상태를 알고 있을 때 전달하는 `{ userId, sessionId }` |
 | `context` | no | `{}` | 이후 이벤트의 `properties_json`에 공통으로 붙일 promotion, hotel, device 등 domain context |
 | `debug` | no | `false` | drop, send fail 같은 SDK 내부 경고를 console에 출력 |
@@ -161,7 +163,8 @@ GitHub Pages로 배포된 IIFE bundle을 직접 불러올 수 있습니다.
 <script src="https://krafton-jungle-project-4team.github.io/loop-ad_event_sdk/loop-ad-event-sdk.iife.js"></script>
 <script>
   const sdk = LoopAdEventSDK.init({
-    projectId: "demo-shoppingmall"
+    projectId: "demo-shoppingmall",
+    writeKey: "public_write_key"
   });
 
   window.onAuthReady = function (user, session) {
@@ -225,7 +228,12 @@ sdk.track("banner_hovered", { campaignId: "summer-2026" });
   data-loopad-content-option-id="option_a"
   data-loopad-promotion-channel="onsite_banner"
   data-loopad-hotel-id="hotel_123"
-  data-loopad-hotel-cluster="seoul_family"
+  data-loopad-hotel-cluster="42"
+  data-loopad-hotel-market="1001"
+  data-loopad-price="129000"
+  data-loopad-breakfast-included="true"
+  data-loopad-free-cancellation="false"
+  data-loopad-room-type="deluxe"
 >
   View hotel deal
 </button>
@@ -253,10 +261,13 @@ data-loopad-checkin-date
 data-loopad-checkout-date
 data-loopad-adult-count
 data-loopad-child-count
-data-loopad-room-price
+data-loopad-price
 data-loopad-booking-id
-data-loopad-booking-value
+data-loopad-revenue
 data-loopad-currency
+data-loopad-room-type
+data-loopad-breakfast-included
+data-loopad-free-cancellation
 data-loopad-device
 ```
 
@@ -303,7 +314,7 @@ SDK는 버튼 텍스트를 기본 수집하지 않습니다. 필요할 때만 �
 기본 정책은 아래와 같습니다.
 
 ```js
-const sdk = init({ projectId: "demo-shoppingmall" });
+const sdk = init({ projectId: "demo-shoppingmall", writeKey: "public_write_key" });
 
 sdk.track("hotel_detail_view", { hotelId: "hotel-before-login" }); // dropped
 
@@ -339,6 +350,7 @@ promotion/hotel domain 값, element metadata, `data-loopad-prop-*` 값이 함께
 ```json
 {
   "project_id": "demo-shoppingmall",
+  "write_key": "public_write_key",
   "schema_version": "hotel_rec_promo.v1",
   "event_id": "evt_...",
   "event_name": "hotel_detail_view",
@@ -346,7 +358,7 @@ promotion/hotel domain 값, element metadata, `data-loopad-prop-*` 값이 함께
   "source": "browser_sdk",
   "user_id": "user-123",
   "session_id": "session-123",
-  "properties_json": "{\"campaign_id\":\"camp_summer_2026\",\"hotel_cluster\":\"seoul_family\",\"page\":...,\"sdk\":...}"
+  "properties_json": "{\"campaign_id\":\"camp_summer_2026\",\"hotel_cluster\":\"42\",\"page_path\":\"/hotels/123\",\"page\":...,\"sdk\":...}"
 }
 ```
 
