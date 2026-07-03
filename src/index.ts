@@ -38,7 +38,10 @@ export interface EventContext {
     contentId?: string | null;
     contentOptionId?: string | null;
     placementId?: string | null;
+    redirectId?: string | null;
     landingType?: string | null;
+    landingUrl?: string | null;
+    targetUrl?: string | null;
     hotelId?: string | null;
     hotelCluster?: string | null;
     hotelMarket?: string | null;
@@ -48,9 +51,12 @@ export interface EventContext {
     checkoutDate?: string | null;
     adultCount?: number | string | null;
     childCount?: number | string | null;
-    roomPrice?: number | string | null;
+    price?: number | string | null;
+    breakfastIncluded?: boolean | number | string | null;
+    freeCancellation?: boolean | number | string | null;
+    roomType?: string | null;
     bookingId?: string | null;
-    bookingValue?: number | string | null;
+    revenue?: number | string | null;
     currency?: string | null;
     device?: string | null;
 }
@@ -87,6 +93,7 @@ export interface TrackFields extends EventContext {
  */
 export interface InitOptions {
     projectId: string;
+    writeKey: string;
     identity?: Identity | null;
     debug?: boolean | null;
     autoTrackPageViews?: boolean | null;
@@ -96,6 +103,7 @@ export interface InitOptions {
 
 interface LoopAdEventPayload {
     project_id: string;
+    write_key: string;
     schema_version: "hotel_rec_promo.v1";
     event_id: string;
     event_name: string;
@@ -246,10 +254,12 @@ class Runtime {
         previousUrl?: string,
         elementInfo?: { [key: string]: EventPropertyValue }
     ): EventDraft {
+        const pageInfo = page(previousUrl);
         const properties: EventProperties = {
             ...propertiesFromContext(cleanContext({ ...this.config.context, ...fields })),
             ...(fields.properties ?? {}),
-            page: page(previousUrl),
+            page_path: text(pageInfo.path) ?? "",
+            page: pageInfo,
             sdk: { name: SDK_NAME, version }
         };
 
@@ -269,6 +279,7 @@ class Runtime {
     private payload(draft: EventDraft, identity: Identity): LoopAdEventPayload {
         return {
             project_id: this.config.projectId,
+            write_key: this.config.writeKey,
             schema_version: SCHEMA_VERSION,
             event_id: draft.eventId,
             event_name: draft.eventName,
@@ -437,6 +448,7 @@ class Runtime {
 
 interface DefaultInitOptions {
     projectId: string;
+    writeKey: string;
     identity: Identity | null;
     debug: boolean;
     autoTrackPageViews: boolean;
@@ -469,9 +481,13 @@ let active: Runtime | null = null;
  */
 function withDefaultInitOptions(options: InitOptions): DefaultInitOptions {
     const projectId = text(options?.projectId);
+    const writeKey = text(options?.writeKey);
 
     if (!projectId) {
         throw new Error("LoopAdEventSDK requires a non-empty projectId.");
+    }
+    if (!writeKey) {
+        throw new Error("LoopAdEventSDK requires a non-empty writeKey.");
     }
 
     const context = cleanContext(options.context ?? {});
@@ -481,6 +497,7 @@ function withDefaultInitOptions(options: InitOptions): DefaultInitOptions {
 
     return {
         projectId,
+        writeKey,
         identity: identityFromInit(options),
         debug: options.debug ?? false,
         autoTrackPageViews: options.autoTrackPageViews ?? true,
@@ -526,7 +543,10 @@ function cleanContext(context: EventContext): EventContext {
         contentId: text(context.contentId) ?? null,
         contentOptionId: text(context.contentOptionId) ?? null,
         placementId: text(context.placementId) ?? null,
+        redirectId: text(context.redirectId) ?? null,
         landingType: text(context.landingType) ?? null,
+        landingUrl: text(context.landingUrl) ?? null,
+        targetUrl: text(context.targetUrl) ?? null,
         hotelId: text(context.hotelId) ?? null,
         hotelCluster: text(context.hotelCluster) ?? null,
         hotelMarket: text(context.hotelMarket) ?? null,
@@ -536,9 +556,12 @@ function cleanContext(context: EventContext): EventContext {
         checkoutDate: text(context.checkoutDate) ?? null,
         adultCount: integerText(context.adultCount) ?? null,
         childCount: integerText(context.childCount) ?? null,
-        roomPrice: decimalText(context.roomPrice) ?? null,
+        price: decimalText(context.price) ?? null,
+        breakfastIncluded: flagText(context.breakfastIncluded) ?? null,
+        freeCancellation: flagText(context.freeCancellation) ?? null,
+        roomType: text(context.roomType) ?? null,
         bookingId: text(context.bookingId) ?? null,
-        bookingValue: decimalText(context.bookingValue) ?? null,
+        revenue: decimalText(context.revenue) ?? null,
         currency: text(context.currency) ?? null,
         device: text(context.device) ?? null,
     };
@@ -556,7 +579,10 @@ function propertiesFromContext(context: EventContext): EventProperties {
     setProperty(properties, "content_id", context.contentId);
     setProperty(properties, "content_option_id", context.contentOptionId);
     setProperty(properties, "placement_id", context.placementId);
+    setProperty(properties, "redirect_id", context.redirectId);
     setProperty(properties, "landing_type", context.landingType);
+    setProperty(properties, "landing_url", context.landingUrl);
+    setProperty(properties, "target_url", context.targetUrl);
     setProperty(properties, "hotel_id", context.hotelId);
     setProperty(properties, "hotel_cluster", context.hotelCluster);
     setProperty(properties, "hotel_market", context.hotelMarket);
@@ -566,9 +592,12 @@ function propertiesFromContext(context: EventContext): EventProperties {
     setProperty(properties, "checkout_date", context.checkoutDate);
     setProperty(properties, "adult_count", context.adultCount);
     setProperty(properties, "child_count", context.childCount);
-    setProperty(properties, "room_price", context.roomPrice);
+    setProperty(properties, "price", context.price);
+    setProperty(properties, "breakfast_included", context.breakfastIncluded);
+    setProperty(properties, "free_cancellation", context.freeCancellation);
+    setProperty(properties, "room_type", context.roomType);
     setProperty(properties, "booking_id", context.bookingId);
-    setProperty(properties, "booking_value", context.bookingValue);
+    setProperty(properties, "revenue", context.revenue);
     setProperty(properties, "currency", context.currency);
     setProperty(properties, "device", context.device);
 
@@ -768,6 +797,23 @@ function decimalText(value: unknown): string | undefined {
     return String(Math.round(normalized * 100) / 100);
 }
 
+function flagText(value: unknown): string | undefined {
+    if (typeof value === "boolean") {
+        return value ? "1" : "0";
+    }
+
+    const normalized = numberOrNull(value);
+    if (normalized !== null) {
+        return normalized === 0 ? "0" : "1";
+    }
+
+    const stringValue = text(value)?.toLowerCase();
+    if (!stringValue) return undefined;
+    if (["true", "yes", "y"].includes(stringValue)) return "1";
+    if (["false", "no", "n"].includes(stringValue)) return "0";
+    return undefined;
+}
+
 // 참고: PostHog autocapture는 DOM attribute를 읽기 전에 EventTarget/Element 형태를
 // 방어적으로 확인합니다.
 // https://github.com/PostHog/posthog-js/blob/main/packages/browser/src/autocapture.ts
@@ -862,7 +908,10 @@ const TEXT_ATTRIBUTES = [
     ["contentId", "data-loopad-content-id"],
     ["contentOptionId", "data-loopad-content-option-id"],
     ["placementId", "data-loopad-placement-id"],
+    ["redirectId", "data-loopad-redirect-id"],
     ["landingType", "data-loopad-landing-type"],
+    ["landingUrl", "data-loopad-landing-url"],
+    ["targetUrl", "data-loopad-target-url"],
     ["hotelId", "data-loopad-hotel-id"],
     ["hotelCluster", "data-loopad-hotel-cluster"],
     ["hotelMarket", "data-loopad-hotel-market"],
@@ -872,6 +921,9 @@ const TEXT_ATTRIBUTES = [
     ["checkoutDate", "data-loopad-checkout-date"],
     ["bookingId", "data-loopad-booking-id"],
     ["currency", "data-loopad-currency"],
+    ["roomType", "data-loopad-room-type"],
+    ["breakfastIncluded", "data-loopad-breakfast-included"],
+    ["freeCancellation", "data-loopad-free-cancellation"],
     ["device", "data-loopad-device"]
 ] as const;
 
@@ -886,6 +938,6 @@ const TEXT_ATTRIBUTES = [
 const NUMBER_ATTRIBUTES = [
     ["adultCount", "data-loopad-adult-count"],
     ["childCount", "data-loopad-child-count"],
-    ["roomPrice", "data-loopad-room-price"],
-    ["bookingValue", "data-loopad-booking-value"]
+    ["price", "data-loopad-price"],
+    ["revenue", "data-loopad-revenue"]
 ] as const;

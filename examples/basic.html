@@ -7,23 +7,32 @@
     </head>
     <body>
         <button
-            data-loopad-event="add_to_cart"
-            data-loopad-product-id="GGOEGCBD142299"
-            data-loopad-category="Home/Eco-Friendly"
+            data-loopad-event="promotion_click"
+            data-loopad-campaign-id="camp_summer_2026"
+            data-loopad-promotion-id="promo_banner_001"
+            data-loopad-promotion-run-id="run_banner_001"
+            data-loopad-ad-experiment-id="ad_exp_banner_001"
+            data-loopad-segment-id="seg_repeat_hotel"
+            data-loopad-content-id="content_banner_001"
+            data-loopad-content-option-id="option_a"
+            data-loopad-promotion-channel="onsite_banner"
+            data-loopad-hotel-id="hotel_123"
+            data-loopad-hotel-cluster="42"
+            data-loopad-hotel-market="1001"
             data-loopad-price="12900"
-            data-loopad-quantity="1"
-            data-loopad-prop-slot="product_detail"
+            data-loopad-prop-slot="hotel_detail"
         >
-            Add to cart
+            View hotel deal
         </button>
 
         <script src="../dist/loop-ad-event-sdk.iife.js"></script>
         <script>
             const sdk = LoopAdEventSDK.init({
                 projectId: "demo-shoppingmall",
+                writeKey: "public_write_key",
                 debug: true,
                 context: {
-                    channel: "demo",
+                    promotionChannel: "onsite_banner",
                     device: "desktop"
                 }
             });
@@ -33,9 +42,10 @@
                 sessionId: "demo-session-1"
             });
 
-            sdk.track("product_view", {
-                productId: "GGOEGCBD142299",
-                category: "Home/Eco-Friendly",
+            sdk.track("hotel_detail_view", {
+                hotelId: "hotel_123",
+                hotelCluster: "42",
+                hotelMarket: "1001",
                 price: 12900
             });
         </script>
