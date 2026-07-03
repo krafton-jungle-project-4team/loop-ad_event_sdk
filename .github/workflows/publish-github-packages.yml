@@ -1,12 +1,9 @@
 name: Publish GitHub Package
 
 on:
-  pull_request:
+  push:
     branches:
       - main
-    types:
-      - closed
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -16,7 +13,6 @@ permissions:
 
 jobs:
   publish:
-    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     environment:
       name: github-pages
