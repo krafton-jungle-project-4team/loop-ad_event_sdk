@@ -470,6 +470,18 @@ const INGEST_ENDPOINT = "https://event.api.dev.loop-ad.org";
 const DOM_SELECTOR = "[data-loopad-event]";
 const DOM_EVENTS = ["click", "change", "submit"] as const;
 const TEXT_LIMIT_BYTES = 160;
+const ATTRIBUTION_STORAGE_KEY = "loopad.attribution.v1";
+const ATTRIBUTION_QUERY_PARAMS: ReadonlyArray<readonly [keyof EventContext, string]> = [
+    ["campaignId", "loopad_campaign_id"],
+    ["promotionId", "loopad_promotion_id"],
+    ["promotionRunId", "loopad_promotion_run_id"],
+    ["adExperimentId", "loopad_ad_experiment_id"],
+    ["promotionChannel", "loopad_promotion_channel"],
+    ["segmentId", "loopad_segment_id"],
+    ["contentId", "loopad_content_id"],
+    ["contentOptionId", "loopad_content_option_id"],
+    ["redirectId", "loopad_redirect_id"]
+];
 
 let active: Runtime | null = null;
 
@@ -490,7 +502,10 @@ function withDefaultInitOptions(options: InitOptions): DefaultInitOptions {
         throw new Error("LoopAdEventSDK requires a non-empty writeKey.");
     }
 
-    const context = cleanContext(options.context ?? {});
+    const context = cleanContext({
+        ...(options.context ?? {}),
+        ...resolveAttributionContext()
+    });
     if (!context.device) {
         context.device = detectDevice() ?? null;
     }
@@ -602,6 +617,94 @@ function propertiesFromContext(context: EventContext): EventProperties {
     setProperty(properties, "device", context.device);
 
     return properties;
+}
+
+function resolveAttributionContext(): EventContext {
+    const urlContext = cleanContext(attributionContextFromUrl());
+
+    if (hasContextValues(urlContext)) {
+        writeStoredAttributionContext(urlContext);
+        return urlContext;
+    }
+
+    return readStoredAttributionContext();
+}
+
+function attributionContextFromUrl(): EventContext {
+    const context: EventContext = {};
+
+    try {
+        const url = new URL(href());
+
+        for (const [contextKey, queryKey] of ATTRIBUTION_QUERY_PARAMS) {
+            const value = text(url.searchParams.get(queryKey));
+            if (value) {
+                context[contextKey] = value;
+            }
+        }
+    } catch {
+        return {};
+    }
+
+    return context;
+}
+
+function readStoredAttributionContext(): EventContext {
+    try {
+        const stored = safeSessionStorage()?.getItem(ATTRIBUTION_STORAGE_KEY);
+        if (!stored) {
+            return {};
+        }
+
+        const parsed = JSON.parse(stored);
+        return isRecord(parsed) ? cleanContext(parsed as EventContext) : {};
+    } catch {
+        return {};
+    }
+}
+
+function writeStoredAttributionContext(context: EventContext): void {
+    try {
+        const compact = compactContext(context);
+        if (Object.keys(compact).length === 0) {
+            return;
+        }
+
+        safeSessionStorage()?.setItem(ATTRIBUTION_STORAGE_KEY, JSON.stringify(compact));
+    } catch {
+        // Storage can be unavailable in private mode or embedded browser contexts.
+    }
+}
+
+function compactContext(context: EventContext): EventContext {
+    const compact: EventContext = {};
+
+    for (const [contextKey] of ATTRIBUTION_QUERY_PARAMS) {
+        const value = text(context[contextKey]);
+        if (value) {
+            compact[contextKey] = value;
+        }
+    }
+
+    return compact;
+}
+
+function hasContextValues(context: EventContext): boolean {
+    return Object.values(compactContext(context)).some(
+        (value) => value !== null && value !== undefined && value !== ""
+    );
+}
+
+function safeSessionStorage(): Storage | null {
+    try {
+        return typeof sessionStorage === "undefined" ? null : sessionStorage;
+    } catch {
+        return null;
+    }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function setProperty(properties: EventProperties, key: string, value: EventPropertyValue | undefined): void {

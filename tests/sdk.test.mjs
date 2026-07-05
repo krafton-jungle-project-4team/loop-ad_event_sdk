@@ -8,10 +8,12 @@ let requests;
 let listeners;
 let currentUrl;
 let activeSdk;
+let sessionItems;
 
 beforeEach(() => {
     requests = [];
     listeners = new Map();
+    sessionItems = new Map();
     currentUrl = new URL("https://demo-shoppingmall.dev.loop-ad.org/products/sku-1");
     activeSdk = null;
 
@@ -19,6 +21,7 @@ beforeEach(() => {
     globalThis.window = createWindow();
     globalThis.history = createHistory();
     globalThis.document = createDocument();
+    globalThis.sessionStorage = createSessionStorage();
     globalThis.fetch = async (url, options) => {
         requests.push({ url, body: JSON.parse(options.body) });
         return { ok: true, status: 202 };
@@ -176,6 +179,96 @@ test("maps manual hotel event fields into properties_json", () => {
     assert.equal(properties.currency, "KRW");
     assert.equal(properties.device, "mobile");
     assert.equal(properties.route_group, "hotel-detail");
+});
+
+test("uses URL attribution query as default promotion context", () => {
+    currentUrl = new URL(
+        "https://demo-shoppingmall.dev.loop-ad.org/landing" +
+            "?loopad_campaign_id=campaign-real" +
+            "&loopad_promotion_id=promotion-real" +
+            "&loopad_promotion_run_id=run-real" +
+            "&loopad_ad_experiment_id=exp-real" +
+            "&loopad_promotion_channel=email" +
+            "&loopad_segment_id=segment-real" +
+            "&loopad_content_id=content-real" +
+            "&loopad_content_option_id=option-real" +
+            "&loopad_redirect_id=redirect-real"
+    );
+
+    activeSdk = init({
+        projectId: "demo-shoppingmall",
+        writeKey: "write-key-demo",
+        autoTrackPageViews: false,
+        identity: {
+            userId: "user-1",
+            sessionId: "session-1"
+        },
+        context: {
+            campaignId: "demo_project",
+            promotionRunId: "demo_project",
+            adExperimentId: "exp_smoke",
+            promotionChannel: "onsite_banner"
+        }
+    });
+
+    activeSdk.track("booking_complete", { bookingId: "booking-1" });
+
+    assert.equal(requests.length, 1);
+    const properties = JSON.parse(requests[0].body.properties_json);
+    assert.equal(properties.campaign_id, "campaign-real");
+    assert.equal(properties.promotion_id, "promotion-real");
+    assert.equal(properties.promotion_run_id, "run-real");
+    assert.equal(properties.ad_experiment_id, "exp-real");
+    assert.equal(properties.promotion_channel, "email");
+    assert.equal(properties.segment_id, "segment-real");
+    assert.equal(properties.content_id, "content-real");
+    assert.equal(properties.content_option_id, "option-real");
+    assert.equal(properties.redirect_id, "redirect-real");
+    assert.equal(properties.booking_id, "booking-1");
+});
+
+test("keeps URL attribution in session storage for later page events", () => {
+    currentUrl = new URL(
+        "https://demo-shoppingmall.dev.loop-ad.org/landing" +
+            "?loopad_campaign_id=campaign-real" +
+            "&loopad_promotion_id=promotion-real" +
+            "&loopad_promotion_run_id=run-real" +
+            "&loopad_ad_experiment_id=exp-real" +
+            "&loopad_redirect_id=redirect-real"
+    );
+
+    activeSdk = init({
+        projectId: "demo-shoppingmall",
+        writeKey: "write-key-demo",
+        autoTrackPageViews: false,
+        identity: {
+            userId: "user-1",
+            sessionId: "session-1"
+        }
+    });
+    activeSdk.destroy();
+    requests = [];
+    currentUrl = new URL("https://demo-shoppingmall.dev.loop-ad.org/checkout");
+
+    activeSdk = init({
+        projectId: "demo-shoppingmall",
+        writeKey: "write-key-demo",
+        autoTrackPageViews: false,
+        identity: {
+            userId: "user-1",
+            sessionId: "session-1"
+        }
+    });
+    activeSdk.track("booking_complete", { bookingId: "booking-2" });
+
+    assert.equal(requests.length, 1);
+    const properties = JSON.parse(requests[0].body.properties_json);
+    assert.equal(properties.campaign_id, "campaign-real");
+    assert.equal(properties.promotion_id, "promotion-real");
+    assert.equal(properties.promotion_run_id, "run-real");
+    assert.equal(properties.ad_experiment_id, "exp-real");
+    assert.equal(properties.redirect_id, "redirect-real");
+    assert.equal(properties.booking_id, "booking-2");
 });
 
 test("sends custom string event names", () => {
@@ -425,6 +518,23 @@ function createDocument() {
             for (const handler of listeners.get(type) ?? []) {
                 handler(event);
             }
+        }
+    };
+}
+
+function createSessionStorage() {
+    return {
+        getItem(key) {
+            return sessionItems.has(key) ? sessionItems.get(key) : null;
+        },
+        setItem(key, value) {
+            sessionItems.set(key, String(value));
+        },
+        removeItem(key) {
+            sessionItems.delete(key);
+        },
+        clear() {
+            sessionItems.clear();
         }
     };
 }
