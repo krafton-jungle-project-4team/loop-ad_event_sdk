@@ -633,8 +633,14 @@ function resolveAttributionContext(): EventContext {
 function attributionContextFromUrl(): EventContext {
     const context: EventContext = {};
 
-    try {
-        const url = new URL(href());
+    for (const candidateUrl of attributionCandidateUrls()) {
+        let url: URL;
+
+        try {
+            url = new URL(candidateUrl);
+        } catch {
+            continue;
+        }
 
         for (const [contextKey, queryKey] of ATTRIBUTION_QUERY_PARAMS) {
             const value = text(url.searchParams.get(queryKey));
@@ -642,11 +648,24 @@ function attributionContextFromUrl(): EventContext {
                 context[contextKey] = value;
             }
         }
-    } catch {
-        return {};
     }
 
     return context;
+}
+
+function attributionCandidateUrls(): string[] {
+    const candidates = [href()];
+
+    try {
+        const referrer = text(document?.referrer);
+        if (referrer) {
+            candidates.unshift(referrer);
+        }
+    } catch {
+        // document can be unavailable in non-browser test/runtime environments.
+    }
+
+    return candidates;
 }
 
 function readStoredAttributionContext(): EventContext {

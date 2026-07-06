@@ -227,6 +227,46 @@ test("uses URL attribution query as default promotion context", () => {
     assert.equal(properties.booking_id, "booking-1");
 });
 
+test("uses referrer attribution when the current page omits loopad params", () => {
+    currentUrl = new URL("https://demo-shoppingmall.dev.loop-ad.org/landing?deal=summer");
+    globalThis.document.referrer =
+        "https://dashboard.api.dev.loop-ad.org/r/redirect-real" +
+        "?loopad_campaign_id=campaign-real" +
+        "&loopad_promotion_id=promotion-real" +
+        "&loopad_promotion_run_id=run-real" +
+        "&loopad_ad_experiment_id=exp-real" +
+        "&loopad_promotion_channel=email" +
+        "&loopad_segment_id=segment-real" +
+        "&loopad_content_id=content-real" +
+        "&loopad_content_option_id=option-real" +
+        "&loopad_redirect_id=redirect-real";
+
+    activeSdk = init({
+        projectId: "demo-shoppingmall",
+        writeKey: "write-key-demo",
+        autoTrackPageViews: false,
+        identity: {
+            userId: "user-1",
+            sessionId: "session-1"
+        }
+    });
+
+    activeSdk.track("booking_complete", { bookingId: "booking-1" });
+
+    assert.equal(requests.length, 1);
+    const properties = JSON.parse(requests[0].body.properties_json);
+    assert.equal(properties.campaign_id, "campaign-real");
+    assert.equal(properties.promotion_id, "promotion-real");
+    assert.equal(properties.promotion_run_id, "run-real");
+    assert.equal(properties.ad_experiment_id, "exp-real");
+    assert.equal(properties.promotion_channel, "email");
+    assert.equal(properties.segment_id, "segment-real");
+    assert.equal(properties.content_id, "content-real");
+    assert.equal(properties.content_option_id, "option-real");
+    assert.equal(properties.redirect_id, "redirect-real");
+    assert.equal(properties.booking_id, "booking-1");
+});
+
 test("keeps URL attribution in session storage for later page events", () => {
     currentUrl = new URL(
         "https://demo-shoppingmall.dev.loop-ad.org/landing" +
