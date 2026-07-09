@@ -188,10 +188,12 @@ test("uses URL attribution query as default promotion context", () => {
             "&loopad_promotion_id=promotion-real" +
             "&loopad_promotion_run_id=run-real" +
             "&loopad_ad_experiment_id=exp-real" +
-            "&loopad_promotion_channel=email" +
+            "&loopad_channel=email" +
             "&loopad_segment_id=segment-real" +
             "&loopad_content_id=content-real" +
             "&loopad_content_option_id=option-real" +
+            "&loopad_creative_id=creative-real" +
+            "&loopad_placement_id=hero" +
             "&loopad_redirect_id=redirect-real"
     );
 
@@ -223,6 +225,8 @@ test("uses URL attribution query as default promotion context", () => {
     assert.equal(properties.segment_id, "segment-real");
     assert.equal(properties.content_id, "content-real");
     assert.equal(properties.content_option_id, "option-real");
+    assert.equal(properties.creative_id, "creative-real");
+    assert.equal(properties.placement_id, "hero");
     assert.equal(properties.redirect_id, "redirect-real");
     assert.equal(properties.booking_id, "booking-1");
 });
@@ -235,10 +239,11 @@ test("uses referrer attribution when the current page omits loopad params", () =
         "&loopad_promotion_id=promotion-real" +
         "&loopad_promotion_run_id=run-real" +
         "&loopad_ad_experiment_id=exp-real" +
-        "&loopad_promotion_channel=email" +
+        "&loopad_channel=email" +
         "&loopad_segment_id=segment-real" +
         "&loopad_content_id=content-real" +
         "&loopad_content_option_id=option-real" +
+        "&loopad_creative_id=creative-real" +
         "&loopad_redirect_id=redirect-real";
 
     activeSdk = init({
@@ -263,6 +268,7 @@ test("uses referrer attribution when the current page omits loopad params", () =
     assert.equal(properties.segment_id, "segment-real");
     assert.equal(properties.content_id, "content-real");
     assert.equal(properties.content_option_id, "option-real");
+    assert.equal(properties.creative_id, "creative-real");
     assert.equal(properties.redirect_id, "redirect-real");
     assert.equal(properties.booking_id, "booking-1");
 });
@@ -274,6 +280,7 @@ test("keeps URL attribution in session storage for later page events", () => {
             "&loopad_promotion_id=promotion-real" +
             "&loopad_promotion_run_id=run-real" +
             "&loopad_ad_experiment_id=exp-real" +
+            "&loopad_creative_id=creative-real" +
             "&loopad_redirect_id=redirect-real"
     );
 
@@ -307,11 +314,12 @@ test("keeps URL attribution in session storage for later page events", () => {
     assert.equal(properties.promotion_id, "promotion-real");
     assert.equal(properties.promotion_run_id, "run-real");
     assert.equal(properties.ad_experiment_id, "exp-real");
+    assert.equal(properties.creative_id, "creative-real");
     assert.equal(properties.redirect_id, "redirect-real");
     assert.equal(properties.booking_id, "booking-2");
 });
 
-test("sends custom string event names", () => {
+test("sends caller-defined Korean event names", () => {
     activeSdk = init({
         projectId: "demo-shoppingmall",
         writeKey: "write-key-demo",
@@ -322,14 +330,14 @@ test("sends custom string event names", () => {
         }
     });
 
-    activeSdk.track("signup_completed", {
+    activeSdk.track("배너_클릭", {
         campaignId: "summer-2026",
         properties: { source: "hero_banner" }
     });
 
     assert.equal(requests.length, 1);
     assertCanonicalEnvelope(requests[0].body);
-    assert.equal(requests[0].body.event_name, "signup_completed");
+    assert.equal(requests[0].body.event_name, "배너_클릭");
 
     const properties = JSON.parse(requests[0].body.properties_json);
     assert.equal(properties.campaign_id, "summer-2026");
@@ -363,7 +371,7 @@ test("collects annotated DOM events without reading form input values", () => {
     });
 
     const button = new FakeElement("button", {
-        "data-loopad-event": "promotion_click",
+        "data-loopad-event": "배너_클릭",
         "data-loopad-campaign-id": "camp-summer-2026",
         "data-loopad-promotion-id": "promo-banner-001",
         "data-loopad-promotion-run-id": "run-banner-001",
@@ -371,7 +379,8 @@ test("collects annotated DOM events without reading form input values", () => {
         "data-loopad-segment-id": "seg-repeat-hotel",
         "data-loopad-content-id": "content-banner-001",
         "data-loopad-content-option-id": "option-a",
-        "data-loopad-promotion-channel": "onsite_banner",
+        "data-loopad-creative-id": "content-banner-001",
+        "data-loopad-channel": "onsite_banner",
         "data-loopad-hotel-id": "hotel-123",
         "data-loopad-hotel-cluster": "42",
         "data-loopad-hotel-market": "1001",
@@ -398,7 +407,7 @@ test("collects annotated DOM events without reading form input values", () => {
 
     assert.equal(requests.length, 1);
     assertCanonicalEnvelope(requests[0].body);
-    assert.equal(requests[0].body.event_name, "promotion_click");
+    assert.equal(requests[0].body.event_name, "배너_클릭");
 
     const properties = JSON.parse(requests[0].body.properties_json);
     assert.equal(properties.campaign_id, "camp-summer-2026");
@@ -408,6 +417,7 @@ test("collects annotated DOM events without reading form input values", () => {
     assert.equal(properties.segment_id, "seg-repeat-hotel");
     assert.equal(properties.content_id, "content-banner-001");
     assert.equal(properties.content_option_id, "option-a");
+    assert.equal(properties.creative_id, "content-banner-001");
     assert.equal(properties.promotion_channel, "onsite_banner");
     assert.equal(properties.hotel_id, "hotel-123");
     assert.equal(properties.hotel_cluster, "42");
@@ -457,7 +467,7 @@ test("clearIdentity keeps logged-out work from attaching to a future login", () 
 
     activeSdk.track("hotel_detail_view", { hotelId: "hotel-before-login" });
     activeSdk.clearIdentity();
-    activeSdk.track("promotion_click", { hotelId: "hotel-logged-out" });
+    activeSdk.track("배너_클릭", { hotelId: "hotel-logged-out" });
     activeSdk.setIdentity({
         userId: "user-1",
         sessionId: "session-1"

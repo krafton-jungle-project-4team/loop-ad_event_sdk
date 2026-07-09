@@ -185,14 +185,15 @@ GitHub Pages로 배포된 IIFE bundle을 직접 불러올 수 있습니다.
 `track()`의 첫 번째 인자는 문자열입니다. SDK가 브라우저에서 표준 이벤트가 아닌
 이름을 차단하지는 않습니다.
 
-Loop Ad 분석과 추천 파이프라인에서는 아래 표준 이벤트명을 우선 사용합니다.
+Loop Ad 분석과 추천 파이프라인에서는 호출자가 정한 이벤트명을 사용합니다.
+이벤트명은 영어, 한국어 또는 다른 비어 있지 않은 문자열일 수 있습니다.
 
 ```text
 page_view
-promotion_impression
-promotion_click
-campaign_redirect_click
-campaign_landing
+배너_노출
+배너_클릭
+리다이렉트_클릭
+랜딩_진입
 hotel_search
 hotel_click
 hotel_detail_view
@@ -205,7 +206,7 @@ booking_cancel
 
 ```js
 sdk.track("signup_completed");
-sdk.track("banner_hovered", { campaignId: "summer-2026" });
+sdk.track("배너_호버", { campaignId: "summer-2026" });
 ```
 
 운영에서 엄격한 이벤트명 검증이 필요하면 브라우저 SDK가 아니라 Event Collector
@@ -218,7 +219,7 @@ sdk.track("banner_hovered", { campaignId: "summer-2026" });
 
 ```html
 <button
-  data-loopad-event="promotion_click"
+  data-loopad-event="배너_클릭"
   data-loopad-campaign-id="camp_summer_2026"
   data-loopad-promotion-id="promo_banner_001"
   data-loopad-promotion-run-id="run_banner_001"
@@ -226,7 +227,8 @@ sdk.track("banner_hovered", { campaignId: "summer-2026" });
   data-loopad-segment-id="seg_repeat_hotel"
   data-loopad-content-id="content_banner_001"
   data-loopad-content-option-id="option_a"
-  data-loopad-promotion-channel="onsite_banner"
+  data-loopad-channel="onsite_banner"
+  data-loopad-creative-id="content-banner-001"
   data-loopad-hotel-id="hotel_123"
   data-loopad-hotel-cluster="42"
   data-loopad-hotel-market="1001"
@@ -246,7 +248,8 @@ data-loopad-campaign-id
 data-loopad-promotion-id
 data-loopad-promotion-run-id
 data-loopad-ad-experiment-id
-data-loopad-promotion-channel
+data-loopad-channel
+data-loopad-creative-id
 data-loopad-segment-id
 data-loopad-content-id
 data-loopad-content-option-id
@@ -275,7 +278,7 @@ data-loopad-device
 
 ```html
 <button
-  data-loopad-event="promotion_impression"
+  data-loopad-event="배너_노출"
   data-loopad-campaign-id="camp_summer_2026"
   data-loopad-prop-slot="main_banner"
 >
@@ -304,7 +307,7 @@ input radio       -> change
 SDK는 버튼 텍스트를 기본 수집하지 않습니다. 필요할 때만 아래처럼 명시합니다.
 
 ```html
-<button data-loopad-event="promotion_click" data-loopad-label="hero_cta">
+<button data-loopad-event="배너_클릭" data-loopad-label="hero_cta">
   Start
 </button>
 ```

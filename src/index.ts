@@ -37,6 +37,7 @@ export interface EventContext {
     segmentId?: string | null;
     contentId?: string | null;
     contentOptionId?: string | null;
+    creativeId?: string | null;
     placementId?: string | null;
     redirectId?: string | null;
     landingType?: string | null;
@@ -476,10 +477,12 @@ const ATTRIBUTION_QUERY_PARAMS: ReadonlyArray<readonly [keyof EventContext, stri
     ["promotionId", "loopad_promotion_id"],
     ["promotionRunId", "loopad_promotion_run_id"],
     ["adExperimentId", "loopad_ad_experiment_id"],
-    ["promotionChannel", "loopad_promotion_channel"],
+    ["promotionChannel", "loopad_channel"],
     ["segmentId", "loopad_segment_id"],
     ["contentId", "loopad_content_id"],
     ["contentOptionId", "loopad_content_option_id"],
+    ["creativeId", "loopad_creative_id"],
+    ["placementId", "loopad_placement_id"],
     ["redirectId", "loopad_redirect_id"]
 ];
 
@@ -557,6 +560,7 @@ function cleanContext(context: EventContext): EventContext {
         segmentId: text(context.segmentId) ?? null,
         contentId: text(context.contentId) ?? null,
         contentOptionId: text(context.contentOptionId) ?? null,
+        creativeId: text(context.creativeId) ?? null,
         placementId: text(context.placementId) ?? null,
         redirectId: text(context.redirectId) ?? null,
         landingType: text(context.landingType) ?? null,
@@ -593,6 +597,7 @@ function propertiesFromContext(context: EventContext): EventProperties {
     setProperty(properties, "segment_id", context.segmentId);
     setProperty(properties, "content_id", context.contentId);
     setProperty(properties, "content_option_id", context.contentOptionId);
+    setProperty(properties, "creative_id", context.creativeId);
     setProperty(properties, "placement_id", context.placementId);
     setProperty(properties, "redirect_id", context.redirectId);
     setProperty(properties, "landing_type", context.landingType);
@@ -1025,10 +1030,11 @@ const TEXT_ATTRIBUTES = [
     ["promotionId", "data-loopad-promotion-id"],
     ["promotionRunId", "data-loopad-promotion-run-id"],
     ["adExperimentId", "data-loopad-ad-experiment-id"],
-    ["promotionChannel", "data-loopad-promotion-channel"],
+    ["promotionChannel", "data-loopad-channel"],
     ["segmentId", "data-loopad-segment-id"],
     ["contentId", "data-loopad-content-id"],
     ["contentOptionId", "data-loopad-content-option-id"],
+    ["creativeId", "data-loopad-creative-id"],
     ["placementId", "data-loopad-placement-id"],
     ["redirectId", "data-loopad-redirect-id"],
     ["landingType", "data-loopad-landing-type"],
