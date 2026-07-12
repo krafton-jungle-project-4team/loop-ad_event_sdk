@@ -76,8 +76,8 @@ export interface Identity {
 /**
  * `track()`이 받는 이벤트별 필드입니다.
  *
- * 이벤트명은 일반 문자열입니다. 문서에서는 `hotel_detail_view` 같은 표준 이름을
- * 권장하지만, custom event name도 의도적으로 허용합니다.
+ * 이벤트명은 일반 문자열입니다. connection 초기화에서는 게시된 Tracking Plan이
+ * 허용 여부를 결정하고, legacy 초기화에서는 비어 있지 않은 custom name도 허용합니다.
  */
 export interface TrackFields extends EventContext {
     eventId?: string | null;
@@ -88,13 +88,10 @@ export interface TrackFields extends EventContext {
 /**
  * SDK 시작 옵션입니다.
  *
- * Event Collector public API domain은 `loop-ad_infra`의
- * `app-repository-guide.md` Public API Domains 계약에 고정된 값이므로 SDK
- * 옵션으로 덮어쓸 수 없습니다.
+ * connection 초기화는 Dashboard 응답의 Collector URL을 사용합니다. deprecated
+ * legacy 초기화만 기존 고정 Collector endpoint를 계속 사용합니다.
  */
-export interface InitOptions {
-    projectId: string;
-    writeKey: string;
+interface CommonInitOptions {
     identity?: Identity | null;
     debug?: boolean | null;
     autoTrackPageViews?: boolean | null;
@@ -102,10 +99,25 @@ export interface InitOptions {
     context?: EventContext | null;
 }
 
+/** @deprecated Prefer `init({ connectionUrl })` for published Tracking Plan validation. */
+export interface LegacyInitOptions extends CommonInitOptions {
+    projectId: string;
+    writeKey: string;
+    connectionUrl?: never;
+}
+
+export interface ConnectionInitOptions extends CommonInitOptions {
+    connectionUrl: string;
+    projectId?: never;
+    writeKey?: never;
+}
+
+export type InitOptions = LegacyInitOptions | ConnectionInitOptions;
+
 interface LoopAdEventPayload {
     project_id: string;
     write_key: string;
-    schema_version: "hotel_rec_promo.v1";
+    schema_version: string;
     event_id: string;
     event_name: string;
     event_time: string;
@@ -155,8 +167,28 @@ export const version =
  * 작은 runtime client를 반환합니다. 이미 실행 중인 상태에서 다시 호출하면 기존
  * active client를 반환합니다.
  */
-export function init(options: InitOptions): LoopAdEventSdkClient {
-    const initOptions = withDefaultInitOptions(options);
+export function init(options: ConnectionInitOptions): Promise<LoopAdEventSdkClient>;
+/** @deprecated Prefer the async connection URL overload. */
+export function init(options: LegacyInitOptions): LoopAdEventSdkClient;
+export function init(options: InitOptions): LoopAdEventSdkClient | Promise<LoopAdEventSdkClient> {
+    if (isConnectionInitOptions(options)) {
+        return initFromConnection(options);
+    }
+
+    return startRuntime(withDefaultInitOptions(options));
+}
+
+function isConnectionInitOptions(options: InitOptions): options is ConnectionInitOptions {
+    return typeof (options as ConnectionInitOptions).connectionUrl === "string";
+}
+
+async function initFromConnection(options: ConnectionInitOptions): Promise<LoopAdEventSdkClient> {
+    const connectionUrl = requiredHttpUrl(options.connectionUrl, "connectionUrl");
+    const connection = await loadConnection(connectionUrl);
+    return startRuntime(withConnectionInitOptions(options, connection));
+}
+
+function startRuntime(initOptions: DefaultInitOptions): LoopAdEventSdkClient {
 
     if (active && !active.destroyed) {
         warn(active.config.debug || initOptions.debug, "LoopAdEventSDK init() was called more than once.");
@@ -234,6 +266,14 @@ class Runtime {
         // 다만 Loop Ad는 로그인 활동만 기록하므로 identity 이전 이벤트는 의도적으로
         // drop합니다.
         const draft = this.draft(normalizedEventName, fields, previousUrl, elementInfo);
+        const validationErrors = validateEventDraft(draft, this.config.events);
+        if (validationErrors.length > 0) {
+            warn(this.config.debug, "LoopAdEventSDK dropped an event that violates the Tracking Plan.", {
+                eventName: normalizedEventName,
+                reasons: validationErrors
+            });
+            return;
+        }
         const identity = this.config.identity;
 
         if (!identity) {
@@ -281,7 +321,7 @@ class Runtime {
         return {
             project_id: this.config.projectId,
             write_key: this.config.writeKey,
-            schema_version: SCHEMA_VERSION,
+            schema_version: this.config.schemaVersion,
             event_id: draft.eventId,
             event_name: draft.eventName,
             event_time: draft.eventTime,
@@ -292,20 +332,26 @@ class Runtime {
         };
     }
 
-    /** 고정 Event Collector ingest endpoint로 이벤트 하나를 전송합니다. */
+    /** 설정된 Event Collector ingest endpoint로 이벤트 하나를 전송합니다. */
     private send(payload: LoopAdEventPayload): void {
         if (typeof fetch !== "function") {
             warn(this.config.debug, "LoopAdEventSDK cannot send events because fetch is unavailable.");
             return;
         }
 
-        void fetch(INGEST_ENDPOINT, {
+        void fetch(this.config.collectorUrl, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             credentials: "omit",
             keepalive: true,
             body: JSON.stringify(payload)
-        }).catch((error) => warn(this.config.debug, "LoopAdEventSDK event send failed.", error));
+        })
+            .then((response) => {
+                if (!response.ok) {
+                    warn(this.config.debug, `LoopAdEventSDK event send failed with HTTP ${response.status}.`);
+                }
+            })
+            .catch((error) => warn(this.config.debug, "LoopAdEventSDK event send failed.", error));
     }
 
     /**
@@ -455,6 +501,9 @@ interface DefaultInitOptions {
     autoTrackPageViews: boolean;
     collectDomEvents: boolean;
     context: EventContext;
+    collectorUrl: string;
+    schemaVersion: string;
+    events: ReadonlyMap<string, TrackingPlanEvent> | null;
 }
 
 interface EventDraft {
@@ -468,6 +517,7 @@ const SDK_NAME = "loop-ad_event_sdk";
 const SCHEMA_VERSION = "hotel_rec_promo.v1";
 const SOURCE = "browser_sdk";
 const INGEST_ENDPOINT = "https://event.api.dev.loop-ad.org";
+const MAX_CONNECTION_CACHE_TTL_MS = 5 * 60 * 1000;
 const DOM_SELECTOR = "[data-loopad-event]";
 const DOM_EVENTS = ["click", "change", "submit"] as const;
 const TEXT_LIMIT_BYTES = 160;
@@ -488,13 +538,41 @@ const ATTRIBUTION_QUERY_PARAMS: ReadonlyArray<readonly [keyof EventContext, stri
 
 let active: Runtime | null = null;
 
+type JsonSchemaType = "object" | "string" | "number" | "integer" | "boolean" | "array";
+
+interface TrackingPlanSchema {
+    type: JsonSchemaType;
+    properties?: Readonly<Record<string, TrackingPlanSchema>>;
+    required?: readonly string[];
+    items?: TrackingPlanSchema;
+}
+
+interface TrackingPlanEvent {
+    eventName: string;
+    description?: string;
+    propertiesSchema: TrackingPlanSchema;
+}
+
+interface SdkConnection {
+    projectId: string;
+    writeKey: string;
+    collectorUrl: string;
+    schemaVersion: string;
+    schemaUrl: string;
+    revision: number;
+    cacheTtlSeconds: number;
+    events: readonly TrackingPlanEvent[];
+}
+
+const connectionCache = new Map<string, { value: SdkConnection; expiresAt: number }>();
+
 /**
  * 시작 옵션을 완성된 runtime config로 정규화합니다.
  *
  * Event Collector endpoint는 application runtime 설정이 아니라 infra contract이므로
  * endpoint 옵션은 의도적으로 받지 않습니다.
  */
-function withDefaultInitOptions(options: InitOptions): DefaultInitOptions {
+function withDefaultInitOptions(options: LegacyInitOptions): DefaultInitOptions {
     const projectId = text(options?.projectId);
     const writeKey = text(options?.writeKey);
 
@@ -520,12 +598,262 @@ function withDefaultInitOptions(options: InitOptions): DefaultInitOptions {
         debug: options.debug ?? false,
         autoTrackPageViews: options.autoTrackPageViews ?? true,
         collectDomEvents: options.collectDomEvents ?? true,
-        context
+        context,
+        collectorUrl: INGEST_ENDPOINT,
+        schemaVersion: SCHEMA_VERSION,
+        events: null
     };
 }
 
+function withConnectionInitOptions(
+    options: ConnectionInitOptions,
+    connection: SdkConnection
+): DefaultInitOptions {
+    const context = cleanContext({
+        ...(options.context ?? {}),
+        ...resolveAttributionContext()
+    });
+    if (!context.device) {
+        context.device = detectDevice() ?? null;
+    }
+
+    return {
+        projectId: connection.projectId,
+        writeKey: connection.writeKey,
+        identity: identityFromInit(options),
+        debug: options.debug ?? false,
+        autoTrackPageViews: options.autoTrackPageViews ?? true,
+        collectDomEvents: options.collectDomEvents ?? true,
+        context,
+        collectorUrl: connection.collectorUrl,
+        schemaVersion: connection.schemaVersion,
+        events: new Map(connection.events.map((event) => [event.eventName, event]))
+    };
+}
+
+async function loadConnection(connectionUrl: string): Promise<SdkConnection> {
+    const now = Date.now();
+    const cached = connectionCache.get(connectionUrl);
+    if (cached && cached.expiresAt > now) {
+        return cached.value;
+    }
+
+    if (typeof fetch !== "function") {
+        throw new Error("LoopAdEventSDK connection init failed because fetch is unavailable.");
+    }
+
+    let response: Response;
+    try {
+        response = await fetch(connectionUrl, {
+            method: "GET",
+            credentials: "omit",
+            headers: { Accept: "application/json" }
+        });
+    } catch {
+        throw new Error("LoopAdEventSDK connection init failed while fetching the connection.");
+    }
+
+    if (!response.ok) {
+        throw new Error(`LoopAdEventSDK connection init failed with HTTP ${response.status}.`);
+    }
+
+    let rawConnection: unknown;
+    try {
+        rawConnection = await response.json();
+    } catch {
+        throw new Error("LoopAdEventSDK connection init failed because the response is not JSON.");
+    }
+
+    const connection = parseConnection(rawConnection);
+    const ttlMs = Math.min(
+        MAX_CONNECTION_CACHE_TTL_MS,
+        Math.max(1000, connection.cacheTtlSeconds * 1000)
+    );
+    connectionCache.set(connectionUrl, { value: connection, expiresAt: now + ttlMs });
+    return connection;
+}
+
+function parseConnection(value: unknown): SdkConnection {
+    const record = objectRecord(value, "connection response");
+    const eventsValue = record.events;
+    if (!Array.isArray(eventsValue)) {
+        throw new Error("LoopAdEventSDK connection init failed: events must be an array.");
+    }
+
+    const events = eventsValue.map((event, index) => parseTrackingPlanEvent(event, index));
+    const eventNames = new Set<string>();
+    for (const event of events) {
+        if (eventNames.has(event.eventName)) {
+            throw new Error(`LoopAdEventSDK connection init failed: duplicate event ${event.eventName}.`);
+        }
+        eventNames.add(event.eventName);
+    }
+
+    const revision = positiveInteger(record.revision, "revision");
+    const cacheTtlSeconds = positiveNumber(record.cacheTtlSeconds, "cacheTtlSeconds");
+    return {
+        projectId: requiredString(record.projectId, "projectId"),
+        writeKey: requiredString(record.writeKey, "writeKey"),
+        collectorUrl: requiredHttpUrl(record.collectorUrl, "collectorUrl"),
+        schemaVersion: requiredString(record.schemaVersion, "schemaVersion"),
+        schemaUrl: requiredHttpUrl(record.schemaUrl, "schemaUrl"),
+        revision,
+        cacheTtlSeconds,
+        events
+    };
+}
+
+function parseTrackingPlanEvent(value: unknown, index: number): TrackingPlanEvent {
+    const record = objectRecord(value, `events[${index}]`);
+    const description = record.description;
+    if (description !== undefined && typeof description !== "string") {
+        throw new Error(`LoopAdEventSDK connection init failed: events[${index}].description must be a string.`);
+    }
+    return {
+        eventName: requiredString(record.eventName, `events[${index}].eventName`),
+        ...(description ? { description } : {}),
+        propertiesSchema: parseTrackingPlanSchema(
+            record.propertiesSchema,
+            `events[${index}].propertiesSchema`
+        )
+    };
+}
+
+function parseTrackingPlanSchema(value: unknown, path: string): TrackingPlanSchema {
+    const record = objectRecord(value, path);
+    const allowedKeys = new Set(["type", "properties", "required", "items"]);
+    const unsupportedKey = Object.keys(record).find((key) => !allowedKeys.has(key));
+    if (unsupportedKey) {
+        throw new Error(`LoopAdEventSDK connection init failed: ${path}.${unsupportedKey} is unsupported.`);
+    }
+
+    const type = requiredString(record.type, `${path}.type`);
+    if (!(["object", "string", "number", "integer", "boolean", "array"] as string[]).includes(type)) {
+        throw new Error(`LoopAdEventSDK connection init failed: ${path}.type ${type} is unsupported.`);
+    }
+
+    if (type === "object") {
+        const propertiesRecord = objectRecord(record.properties ?? {}, `${path}.properties`);
+        const properties: Record<string, TrackingPlanSchema> = {};
+        for (const [name, schema] of Object.entries(propertiesRecord)) {
+            if (!name.trim()) {
+                throw new Error(`LoopAdEventSDK connection init failed: ${path} has an empty property name.`);
+            }
+            properties[name] = parseTrackingPlanSchema(schema, `${path}.properties.${name}`);
+        }
+
+        const requiredValue = record.required ?? [];
+        if (!Array.isArray(requiredValue) || requiredValue.some((name) => typeof name !== "string" || !name.trim())) {
+            throw new Error(`LoopAdEventSDK connection init failed: ${path}.required must be a string array.`);
+        }
+        const required = requiredValue as string[];
+        if (required.some((name) => !(name in properties))) {
+            throw new Error(`LoopAdEventSDK connection init failed: ${path}.required references an unknown property.`);
+        }
+        return { type, properties, required: [...new Set(required)] };
+    }
+
+    if (type === "array") {
+        if (record.items === undefined) {
+            throw new Error(`LoopAdEventSDK connection init failed: ${path}.items is required for arrays.`);
+        }
+        return { type, items: parseTrackingPlanSchema(record.items, `${path}.items`) };
+    }
+
+    return { type: type as JsonSchemaType };
+}
+
+function validateEventDraft(
+    draft: EventDraft,
+    events: ReadonlyMap<string, TrackingPlanEvent> | null
+): string[] {
+    if (!events) return [];
+    const event = events.get(draft.eventName);
+    if (!event) return [`event ${draft.eventName} is not registered`];
+    return validateSchemaValue(draft.properties, event.propertiesSchema, "properties");
+}
+
+function validateSchemaValue(value: unknown, schema: TrackingPlanSchema, path: string): string[] {
+    switch (schema.type) {
+        case "object": {
+            if (typeof value !== "object" || value === null || Array.isArray(value)) {
+                return [`${path} must be an object`];
+            }
+            const record = value as Record<string, unknown>;
+            const errors: string[] = [];
+            for (const name of schema.required ?? []) {
+                if (!Object.prototype.hasOwnProperty.call(record, name) || record[name] === undefined) {
+                    errors.push(`${path}.${name} is required`);
+                }
+            }
+            for (const [name, propertySchema] of Object.entries(schema.properties ?? {})) {
+                if (Object.prototype.hasOwnProperty.call(record, name) && record[name] !== undefined) {
+                    errors.push(...validateSchemaValue(record[name], propertySchema, `${path}.${name}`));
+                }
+            }
+            return errors;
+        }
+        case "array":
+            if (!Array.isArray(value)) return [`${path} must be an array`];
+            return value.flatMap((item, index) =>
+                validateSchemaValue(item, schema.items as TrackingPlanSchema, `${path}[${index}]`)
+            );
+        case "string":
+            return typeof value === "string" ? [] : [`${path} must be a string`];
+        case "number":
+            return typeof value === "number" && Number.isFinite(value) ? [] : [`${path} must be a number`];
+        case "integer":
+            return typeof value === "number" && Number.isInteger(value) ? [] : [`${path} must be an integer`];
+        case "boolean":
+            return typeof value === "boolean" ? [] : [`${path} must be a boolean`];
+    }
+}
+
+function objectRecord(value: unknown, path: string): Record<string, unknown> {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+        throw new Error(`LoopAdEventSDK connection init failed: ${path} must be an object.`);
+    }
+    return value as Record<string, unknown>;
+}
+
+function requiredString(value: unknown, path: string): string {
+    if (typeof value !== "string" || !value.trim()) {
+        throw new Error(`LoopAdEventSDK connection init failed: ${path} must be a non-empty string.`);
+    }
+    return value.trim();
+}
+
+function positiveNumber(value: unknown, path: string): number {
+    if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+        throw new Error(`LoopAdEventSDK connection init failed: ${path} must be a positive number.`);
+    }
+    return value;
+}
+
+function positiveInteger(value: unknown, path: string): number {
+    const parsed = positiveNumber(value, path);
+    if (!Number.isInteger(parsed)) {
+        throw new Error(`LoopAdEventSDK connection init failed: ${path} must be an integer.`);
+    }
+    return parsed;
+}
+
+function requiredHttpUrl(value: unknown, path: string): string {
+    const candidate = requiredString(value, path);
+    let parsed: URL;
+    try {
+        parsed = new URL(candidate);
+    } catch {
+        throw new Error(`LoopAdEventSDK connection init failed: ${path} must be an absolute URL.`);
+    }
+    if ((parsed.protocol !== "https:" && parsed.protocol !== "http:") || !parsed.host) {
+        throw new Error(`LoopAdEventSDK connection init failed: ${path} must be an HTTP(S) URL.`);
+    }
+    return parsed.href;
+}
+
 /** 시작 시 전달된 identity를 해석하고, 로그인 전이면 `null`을 반환합니다. */
-function identityFromInit(options: InitOptions): Identity | null {
+function identityFromInit(options: CommonInitOptions): Identity | null {
     if (options.identity) {
         return normalizeIdentity(options.identity);
     }
