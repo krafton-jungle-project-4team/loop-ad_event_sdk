@@ -11,8 +11,9 @@ drop하며, `setIdentity()`가 처음 identity를 설정하면 현재 페이지�
 ## 참고한 계약
 
 - `loop-ad_infra/docs/app-repository-guide.md`: 앱 repo는 인프라를 직접 만들지
-  않고 정해진 contract를 따르며, Event Collector public endpoint는 Public API
-  Domains 계약에 따라 `https://event.api.dev.loop-ad.org`를 고정 사용한다.
+  않고 정해진 public domain contract를 따른다. connection 초기화는 Dashboard가
+  반환한 Collector URL을 사용하고 legacy 초기화는 기존
+  `https://event.api.dev.loop-ad.org` endpoint를 유지한다.
 - ClickHouse `raw_events` 테이블: `hotel_rec_promo.v1` 원천 이벤트를 저장한다.
 
 ## 참고한 SDK 패턴
@@ -83,16 +84,20 @@ dist/types/index.d.ts
 
 `dist/`는 빌드 산출물이므로 git에는 커밋하지 않습니다.
 
-## 권장 사용
+## Tracking Plan 연결 (권장)
 
-앱 부팅 시 SDK를 먼저 시작합니다. 이 시점에는 로그인 사용자 정보가 없어도 됩니다.
+Dashboard가 제공한 connection URL로 SDK를 비동기 초기화합니다. SDK는 게시된 이벤트
+계약을 runtime에서 검증하고, connection 응답의 제한된 TTL 동안 schema를 메모리에
+cache합니다. connection 조회 실패, non-2xx 응답, 잘못된 응답 계약은 `init()` 실패로
+호출자에게 전달됩니다.
 
 ```js
 import { init } from "@krafton-jungle-project-4team/loop-ad_event_sdk";
 
-const sdk = init({
-  projectId: "demo-shoppingmall",
-  writeKey: "public_write_key",
+const sdk = await init({
+  connectionUrl:
+    "https://dashboard.api.dev.loop-ad.org/api/public/v1/sdk/connections/public_sdk_key",
+  debug: import.meta.env.DEV,
   context: {
     promotionChannel: "onsite_banner",
     device: "mobile"
@@ -147,13 +152,29 @@ sdk.clearIdentity();
 
 | option | 필수 | 기본값 | 설명 |
 |---|---:|---|---|
-| `projectId` | yes | 없음 | Event Collector payload의 `project_id`로 들어가는 서비스 식별자 |
-| `writeKey` | yes | 없음 | Event Collector payload의 `write_key`로 들어가는 public 수집 키 |
+| `connectionUrl` | yes | 없음 | Dashboard가 발급한 공개 SDK connection URL |
 | `identity` | no | `null` | 앱 시작 시 이미 로그인 상태를 알고 있을 때 전달하는 `{ userId, sessionId }` |
 | `context` | no | `{}` | 이후 이벤트의 `properties_json`에 공통으로 붙일 promotion, hotel, device 등 domain context |
 | `debug` | no | `false` | drop, send fail 같은 SDK 내부 경고를 console에 출력 |
 | `autoTrackPageViews` | no | `true` | init identity 또는 최초 `setIdentity()` 시 현재 페이지를 기록하고 SPA URL 변경을 추적 |
 | `collectDomEvents` | no | `true` | `data-loopad-event`가 붙은 DOM event를 document delegation으로 수집 |
+
+Tracking Plan에 없는 이벤트명, 필수 속성 누락, 속성 타입 오류는 Collector로 보내지
+않습니다. `debug: true`일 때 drop 이유를 `console.warn`으로 확인할 수 있고,
+`debug: false`인 production에서는 해당 warning을 출력하지 않습니다.
+
+## Legacy 초기화
+
+기존 `init({ projectId, writeKey })`는 호환성을 위해 유지하지만 deprecated 경로입니다.
+이 경로는 게시된 Tracking Plan을 조회하지 않으므로 client-side schema validation을
+수행하지 않습니다.
+
+```js
+const sdk = init({
+  projectId: "demo-shoppingmall",
+  writeKey: "public_write_key"
+});
+```
 
 ## script tag 사용
 
@@ -162,9 +183,9 @@ GitHub Pages로 배포된 IIFE bundle을 직접 불러올 수 있습니다.
 ```html
 <script src="https://krafton-jungle-project-4team.github.io/loop-ad_event_sdk/loop-ad-event-sdk.iife.js"></script>
 <script>
-  const sdk = LoopAdEventSDK.init({
-    projectId: "demo-shoppingmall",
-    writeKey: "public_write_key"
+  const sdk = await LoopAdEventSDK.init({
+    connectionUrl:
+      "https://dashboard.api.dev.loop-ad.org/api/public/v1/sdk/connections/public_sdk_key"
   });
 
   window.onAuthReady = function (user, session) {
@@ -182,8 +203,9 @@ GitHub Pages로 배포된 IIFE bundle을 직접 불러올 수 있습니다.
 
 ## 이벤트명
 
-`track()`의 첫 번째 인자는 문자열입니다. SDK가 브라우저에서 표준 이벤트가 아닌
-이름을 차단하지는 않습니다.
+`track()`의 첫 번째 인자는 문자열입니다. connection 초기화 경로에서는 게시된
+Tracking Plan에 등록된 이벤트만 전송합니다. Legacy 초기화 경로에서는 기존처럼
+비어 있지 않은 custom event name을 허용합니다.
 
 Loop Ad 분석과 추천 파이프라인에서는 호출자가 정한 이벤트명을 사용합니다.
 이벤트명은 영어, 한국어 또는 다른 비어 있지 않은 문자열일 수 있습니다.
@@ -209,8 +231,8 @@ sdk.track("signup_completed");
 sdk.track("배너_호버", { campaignId: "summer-2026" });
 ```
 
-운영에서 엄격한 이벤트명 검증이 필요하면 브라우저 SDK가 아니라 Event Collector
-또는 tracking plan 단계에서 처리합니다.
+이벤트 속성 검증은 JSON Schema의 `object`, `string`, `number`, `integer`, `boolean`,
+`array`, `required` subset만 지원합니다.
 
 ## DOM attribute 수집
 
@@ -343,8 +365,8 @@ SDK는 anonymous id를 만들지 않습니다.
 ## Payload 형식
 
 SDK는 Event Collector로 아래처럼 `hotel_rec_promo.v1` common envelope JSON을
-전송합니다. 요청 도메인은 `loop-ad_infra/docs/app-repository-guide.md`의 Public
-API Domains 계약에 따라 `https://event.api.dev.loop-ad.org`로 고정합니다.
+전송합니다. connection 초기화는 검증된 connection 응답의 `collectorUrl`을,
+legacy 초기화는 기존 `https://event.api.dev.loop-ad.org`를 사용합니다.
 
 `properties_json`에는 기본적으로 page 정보와 SDK 정보가 들어가며, DOM 수집 시
 promotion/hotel domain 값, element metadata, `data-loopad-prop-*` 값이 함께
@@ -372,6 +394,8 @@ promotion/hotel domain 값, element metadata, `data-loopad-prop-*` 값이 함께
 - visible text가 꼭 필요하면 `data-loopad-text="true"` 또는
   `data-loopad-label`을 명시합니다.
 - secret, DB credential, API key, JWT는 브라우저 SDK 옵션에 넣지 않습니다.
+- connection URL과 write key는 공개 값이며 인증 수단이 아닙니다. Origin 검사는
+  브라우저 오용 방지 장치일 뿐, 조작 가능한 Origin을 신뢰하는 인증이 아닙니다.
 
 운영 적용 전에는 고객사 서비스의 동의 화면, 개인정보 처리방침, 보관 기간,
 국가별 규제 요구사항을 별도로 검토해야 합니다.

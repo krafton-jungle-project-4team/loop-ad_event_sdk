@@ -484,6 +484,188 @@ test("clearIdentity keeps logged-out work from attaching to a future login", () 
     assert.equal(properties.hotel_id, "hotel-after-login");
 });
 
+test("initializes from a validated connection and preserves the wire payload", async () => {
+    const connectionUrl = "https://dashboard.api.dev.loop-ad.org/api/public/v1/sdk/connections/sdk-1";
+    let connectionFetches = 0;
+    globalThis.fetch = async (url, options = {}) => {
+        if (options.method === "GET") {
+            connectionFetches += 1;
+            return jsonResponse(connectionFixture());
+        }
+        requests.push({ url, body: JSON.parse(options.body) });
+        return { ok: true, status: 202 };
+    };
+
+    activeSdk = await init({
+        connectionUrl,
+        autoTrackPageViews: false,
+        identity: { userId: "user-1", sessionId: "session-1" }
+    });
+    activeSdk.track("hotel_detail_view", {
+        hotelId: "hotel-123",
+        properties: { room_count: 2, refundable: true }
+    });
+
+    assert.equal(connectionFetches, 1);
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].url, "https://event.api.dev.loop-ad.org/events");
+    assertCanonicalEnvelope(requests[0].body);
+    assert.equal(requests[0].body.project_id, "demo-shoppingmall");
+    assert.equal(requests[0].body.write_key, "sdk-key-1");
+});
+
+test("caches a validated connection for the bounded server TTL", async () => {
+    const connectionUrl = "https://dashboard.api.dev.loop-ad.org/api/public/v1/sdk/connections/sdk-cache";
+    let connectionFetches = 0;
+    globalThis.fetch = async (_url, options = {}) => {
+        if (options.method === "GET") {
+            connectionFetches += 1;
+            return jsonResponse(connectionFixture());
+        }
+        return { ok: true, status: 202 };
+    };
+
+    activeSdk = await init({ connectionUrl, autoTrackPageViews: false });
+    activeSdk.destroy();
+    activeSdk = await init({ connectionUrl, autoTrackPageViews: false });
+
+    assert.equal(connectionFetches, 1);
+});
+
+test("drops unknown, missing-required, and mistyped events with debug reasons", async (t) => {
+    const warnings = [];
+    const originalWarn = console.warn;
+    console.warn = (...args) => warnings.push(args);
+    t.after(() => {
+        console.warn = originalWarn;
+    });
+    globalThis.fetch = async (_url, options = {}) => {
+        if (options.method === "GET") return jsonResponse(connectionFixture());
+        requests.push({ body: JSON.parse(options.body) });
+        return { ok: true, status: 202 };
+    };
+
+    activeSdk = await init({
+        connectionUrl: "https://dashboard.api.dev.loop-ad.org/api/public/v1/sdk/connections/sdk-invalid",
+        debug: true,
+        autoTrackPageViews: false,
+        identity: { userId: "user-1", sessionId: "session-1" }
+    });
+    activeSdk.track("not_registered");
+    activeSdk.track("hotel_detail_view", { properties: { room_count: 2, refundable: true } });
+    activeSdk.track("hotel_detail_view", {
+        hotelId: "hotel-123",
+        properties: { room_count: "two", refundable: true }
+    });
+
+    assert.equal(requests.length, 0);
+    assert.equal(warnings.length, 3);
+    assert.match(JSON.stringify(warnings), /not registered/);
+    assert.match(JSON.stringify(warnings), /hotel_id is required/);
+    assert.match(JSON.stringify(warnings), /room_count must be an integer/);
+});
+
+test("suppresses Tracking Plan warnings when debug is disabled", async (t) => {
+    const warnings = [];
+    const originalWarn = console.warn;
+    console.warn = (...args) => warnings.push(args);
+    t.after(() => {
+        console.warn = originalWarn;
+    });
+    globalThis.fetch = async (_url, options = {}) => {
+        if (options.method === "GET") return jsonResponse(connectionFixture());
+        requests.push({ body: JSON.parse(options.body) });
+        return { ok: true, status: 202 };
+    };
+
+    activeSdk = await init({
+        connectionUrl: "https://dashboard.api.dev.loop-ad.org/api/public/v1/sdk/connections/sdk-production",
+        autoTrackPageViews: false,
+        identity: { userId: "user-1", sessionId: "session-1" }
+    });
+    activeSdk.track("not_registered");
+
+    assert.equal(requests.length, 0);
+    assert.equal(warnings.length, 0);
+});
+
+test("rejects connection init on HTTP and runtime-contract failures", async () => {
+    globalThis.fetch = async () => ({ ok: false, status: 403 });
+    await assert.rejects(
+        init({ connectionUrl: "https://dashboard.api.dev.loop-ad.org/api/public/v1/sdk/connections/sdk-403" }),
+        /HTTP 403/
+    );
+
+    globalThis.fetch = async () => jsonResponse({ ...connectionFixture(), events: "invalid" });
+    await assert.rejects(
+        init({ connectionUrl: "https://dashboard.api.dev.loop-ad.org/api/public/v1/sdk/connections/sdk-contract" }),
+        /events must be an array/
+    );
+});
+
+test("checks HTTP response.ok for event delivery", async (t) => {
+    const warnings = [];
+    const originalWarn = console.warn;
+    console.warn = (...args) => warnings.push(args);
+    t.after(() => {
+        console.warn = originalWarn;
+    });
+    globalThis.fetch = async (_url, options = {}) => {
+        if (options.method === "GET") return jsonResponse(connectionFixture());
+        return { ok: false, status: 503 };
+    };
+
+    activeSdk = await init({
+        connectionUrl: "https://dashboard.api.dev.loop-ad.org/api/public/v1/sdk/connections/sdk-send-error",
+        debug: true,
+        autoTrackPageViews: false,
+        identity: { userId: "user-1", sessionId: "session-1" }
+    });
+    activeSdk.track("hotel_detail_view", {
+        hotelId: "hotel-123",
+        properties: { room_count: 2, refundable: true }
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    assert.match(JSON.stringify(warnings), /HTTP 503/);
+});
+
+function connectionFixture() {
+    return {
+        projectId: "demo-shoppingmall",
+        writeKey: "sdk-key-1",
+        collectorUrl: "https://event.api.dev.loop-ad.org/events",
+        schemaVersion: "hotel_rec_promo.v1",
+        schemaUrl: "https://dashboard.api.dev.loop-ad.org/api/public/v1/sdk/connections/sdk-1/schema",
+        revision: 1,
+        cacheTtlSeconds: 60,
+        events: [
+            {
+                eventName: "hotel_detail_view",
+                description: "Hotel detail page",
+                propertiesSchema: {
+                    type: "object",
+                    properties: {
+                        hotel_id: { type: "string" },
+                        room_count: { type: "integer" },
+                        refundable: { type: "boolean" }
+                    },
+                    required: ["hotel_id", "room_count", "refundable"]
+                }
+            }
+        ]
+    };
+}
+
+function jsonResponse(body) {
+    return {
+        ok: true,
+        status: 200,
+        json: async () => body
+    };
+}
+
 function assertCanonicalEnvelope(body) {
     assert.deepEqual(Object.keys(body).sort(), [
         "event_id",
