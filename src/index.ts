@@ -1,4 +1,7 @@
-import { createSdkDebugPanel, type SdkDebugPanel } from "./debug-panel";
+import {
+    createSdkDebugPanel,
+    type SdkDebugPanel
+} from "./debug-panel";
 
 /**
  * Tracking Plan으로 검증할 JSON 안전 이벤트 속성 값입니다.
@@ -108,24 +111,51 @@ export const version =
  * active client를 반환합니다.
  */
 export async function init(options: InitOptions): Promise<LoopAdEventSdkClient> {
-    const connectionUrl = requiredHttpUrl(options.connectionUrl, "connectionUrl");
+    failedDebugPanel?.destroy();
+    failedDebugPanel = null;
+
+    const debugPanel = options.debug
+        ? createSdkDebugPanel({
+              sdkVersion: version,
+              connectionUrl: typeof options.connectionUrl === "string" ? options.connectionUrl : "Invalid URL",
+              identityReady: options.identity != null
+          })
+        : null;
+    debugPanel?.start();
+
     try {
+        const connectionUrl = requiredHttpUrl(options.connectionUrl, "connectionUrl");
         const connection = await loadConnection(connectionUrl);
-        return startRuntime(withConnectionInitOptions(options, connection));
+        debugPanel?.setConnection({
+            projectId: connection.projectId,
+            collectorUrl: connection.collectorUrl,
+            schemaUrl: connection.schemaUrl,
+            schemaVersion: connection.schemaVersion,
+            revision: connection.revision,
+            events: connection.events
+        });
+        return startRuntime(withConnectionInitOptions(options, connection), debugPanel);
     } catch (error) {
+        if (debugPanel) {
+            debugPanel.setConnectionError(errorMessage(error));
+            failedDebugPanel = debugPanel;
+        }
         warn(options.debug ?? false, "LoopAdEventSDK initialization failed.", error);
         throw error;
     }
 }
 
-function startRuntime(initOptions: DefaultInitOptions): LoopAdEventSdkClient {
-
+function startRuntime(
+    initOptions: DefaultInitOptions,
+    debugPanel: SdkDebugPanel | null
+): LoopAdEventSdkClient {
     if (active && !active.destroyed) {
         warn(active.config.debug || initOptions.debug, "LoopAdEventSDK init() was called more than once.");
+        debugPanel?.destroy();
         return active.client;
     }
 
-    active = new Runtime(initOptions);
+    active = new Runtime(initOptions, debugPanel);
     active.start();
     return active.client;
 }
@@ -155,22 +185,18 @@ class Runtime {
     private originalReplaceState: History["replaceState"] | null = null;
     private readonly debugPanel: SdkDebugPanel | null;
 
-    constructor(readonly config: DefaultInitOptions) {
-        this.debugPanel = config.debug
-            ? createSdkDebugPanel({
-                  projectId: config.projectId,
-                  schemaVersion: config.schemaVersion,
-                  revision: config.revision,
-                  registeredEventCount: config.events.size
-              })
-            : null;
+    constructor(
+        readonly config: DefaultInitOptions,
+        debugPanel: SdkDebugPanel | null
+    ) {
+        this.debugPanel = debugPanel;
+        this.debugPanel?.setIdentityReady(config.identity !== null);
     }
 
     /** 설정된 listener를 설치하고 가능한 경우 초기 page view를 전송합니다. */
     start(): void {
         this.currentUrl = href();
         this.debugPanel?.start();
-        this.debugPanel?.record("ready", "SDK", "Connection and Tracking Plan loaded.");
         info(this.config.debug, "LoopAdEventSDK initialized.", {
             projectId: this.config.projectId,
             schemaVersion: this.config.schemaVersion,
@@ -216,17 +242,13 @@ class Runtime {
 
         if (!identity) {
             warn(this.config.debug, "LoopAdEventSDK dropped an event because identity is not set.");
-            this.debugPanel?.record("dropped", normalizedEventName, "Identity is not set.");
+            this.recordBlockedEvent(normalizedEventName, "Identity is not set.");
             return;
         }
 
         if (!isPlainObject(properties)) {
             warn(this.config.debug, "LoopAdEventSDK dropped an event because properties must be a plain object.");
-            this.debugPanel?.record(
-                "dropped",
-                normalizedEventName,
-                "Properties must be a plain object."
-            );
+            this.recordBlockedEvent(normalizedEventName, "Properties must be a plain object.");
             return;
         }
 
@@ -245,20 +267,25 @@ class Runtime {
                 eventName: normalizedEventName,
                 reasons: validationErrors
             });
-            this.debugPanel?.record(
-                "dropped",
+            this.debugPanel?.recordValidation(
+                "blocked",
                 normalizedEventName,
                 "Tracking Plan validation failed.",
                 validationErrors
             );
+            this.debugPanel?.recordRequest({
+                status: "blocked",
+                eventName: normalizedEventName,
+                message: "Not sent because Tracking Plan validation failed."
+            });
             return;
         }
 
         info(this.config.debug, "LoopAdEventSDK event passed Tracking Plan validation.", {
             eventName: normalizedEventName
         });
-        this.debugPanel?.record(
-            "validated",
+        this.debugPanel?.recordValidation(
+            "passed",
             normalizedEventName,
             "Tracking Plan validation passed."
         );
@@ -325,16 +352,36 @@ class Runtime {
     private send(payload: LoopAdEventPayload): void {
         if (typeof fetch !== "function") {
             warn(this.config.debug, "LoopAdEventSDK cannot send events because fetch is unavailable.");
-            this.debugPanel?.record("failed", payload.event_name, "Fetch is unavailable.");
+            this.debugPanel?.recordRequest({
+                requestId: payload.event_id,
+                status: "failed",
+                eventName: payload.event_name,
+                message: "Fetch is unavailable."
+            });
             return;
         }
 
         const body = JSON.stringify(payload);
-        if (utf8ByteLength(body) > MAX_REQUEST_BODY_BYTES) {
+        const bodyBytes = utf8ByteLength(body);
+        if (bodyBytes > MAX_REQUEST_BODY_BYTES) {
             warn(this.config.debug, "LoopAdEventSDK dropped an event because the request body is too large.");
-            this.debugPanel?.record("dropped", payload.event_name, "Request body is too large.");
+            this.debugPanel?.recordRequest({
+                requestId: payload.event_id,
+                status: "blocked",
+                eventName: payload.event_name,
+                message: "Request body exceeds the Collector limit.",
+                bodyBytes
+            });
             return;
         }
+
+        this.debugPanel?.recordRequest({
+            requestId: payload.event_id,
+            status: "pending",
+            eventName: payload.event_name,
+            message: "Sending event to Collector.",
+            bodyBytes
+        });
 
         void fetch(this.config.collectorUrl, {
             method: "POST",
@@ -346,11 +393,14 @@ class Runtime {
             .then((response) => {
                 if (!response.ok) {
                     warn(this.config.debug, `LoopAdEventSDK event send failed with HTTP ${response.status}.`);
-                    this.debugPanel?.record(
-                        "failed",
-                        payload.event_name,
-                        `Collector returned HTTP ${response.status}.`
-                    );
+                    this.debugPanel?.recordRequest({
+                        requestId: payload.event_id,
+                        status: "failed",
+                        eventName: payload.event_name,
+                        message: `Collector returned HTTP ${response.status}.`,
+                        httpStatus: response.status,
+                        bodyBytes
+                    });
                     return;
                 }
 
@@ -358,15 +408,24 @@ class Runtime {
                     eventName: payload.event_name,
                     status: response.status
                 });
-                this.debugPanel?.record(
-                    "sent",
-                    payload.event_name,
-                    `Collector accepted the event with HTTP ${response.status}.`
-                );
+                this.debugPanel?.recordRequest({
+                    requestId: payload.event_id,
+                    status: "sent",
+                    eventName: payload.event_name,
+                    message: `Collector accepted the event with HTTP ${response.status}.`,
+                    httpStatus: response.status,
+                    bodyBytes
+                });
             })
             .catch((error) => {
                 warn(this.config.debug, "LoopAdEventSDK event send failed.", error);
-                this.debugPanel?.record("failed", payload.event_name, "Collector request failed.");
+                this.debugPanel?.recordRequest({
+                    requestId: payload.event_id,
+                    status: "failed",
+                    eventName: payload.event_name,
+                    message: "Collector request failed.",
+                    bodyBytes
+                });
             });
     }
 
@@ -380,6 +439,7 @@ class Runtime {
         const hadIdentity = this.config.identity !== null;
         this.config.identity = normalizeIdentity(identity);
         this.config.identityContext = context ? copyPropertyObject(context) : {};
+        this.debugPanel?.setIdentityReady(true);
 
         if (!hadIdentity && this.config.autoTrackPageViews) {
             this.trackPageView();
@@ -390,6 +450,7 @@ class Runtime {
     private clearIdentity(): void {
         this.config.identity = null;
         this.config.identityContext = {};
+        this.debugPanel?.setIdentityReady(false);
     }
 
     /** annotation이 붙은 요소를 수집하기 위해 document-level delegation을 등록합니다. */
@@ -419,7 +480,7 @@ class Runtime {
         const eventName = text(attr(element, "data-loopad-event"));
         if (!eventName) {
             warn(this.config.debug, "LoopAdEventSDK skipped a DOM event without data-loopad-event.");
-            this.debugPanel?.record("dropped", "DOM event", "data-loopad-event is missing.");
+            this.recordBlockedEvent("DOM event", "data-loopad-event is missing.");
             return;
         }
 
@@ -429,12 +490,17 @@ class Runtime {
                 eventName,
                 reason: parsed.reason
             });
-            this.debugPanel?.record(
-                "dropped",
+            this.debugPanel?.recordValidation(
+                "blocked",
                 eventName,
                 "data-loopad-properties is invalid.",
                 [parsed.reason]
             );
+            this.debugPanel?.recordRequest({
+                status: "blocked",
+                eventName,
+                message: "Not sent because data-loopad-properties is invalid."
+            });
             return;
         }
         const elementInfo = elementProperties(element);
@@ -481,6 +547,15 @@ class Runtime {
     /** 현재 페이지를 표준 `page_view` 이벤트로 수집합니다. */
     private trackPageView(previousUrl?: string): void {
         this.track("page_view", {}, {}, previousUrl);
+    }
+
+    private recordBlockedEvent(eventName: string, message: string): void {
+        this.debugPanel?.recordValidation("blocked", eventName, message);
+        this.debugPanel?.recordRequest({
+            status: "blocked",
+            eventName,
+            message: `Not sent: ${message}`
+        });
     }
 
     /** listener를 제거하고 patch한 browser API를 원복합니다. */
@@ -553,6 +628,7 @@ const CREDIT_CARD_PATTERN = /^(?:(?:4[0-9]{12}(?:[0-9]{3})?)|(?:5[1-5][0-9]{14})
 const SSN_PATTERN = /^\d{3}-?\d{2}-?\d{4}$/;
 
 let active: Runtime | null = null;
+let failedDebugPanel: SdkDebugPanel | null = null;
 
 type JsonSchemaType = "object" | "string" | "number" | "integer" | "boolean" | "array";
 
@@ -1134,6 +1210,10 @@ function serialize(properties: EventProperties): string {
 
 function utf8ByteLength(value: string): number {
     return new TextEncoder().encode(value).length;
+}
+
+function errorMessage(error: unknown): string {
+    return error instanceof Error ? error.message : "Unknown SDK initialization error.";
 }
 
 // 참고: truncate-utf8-bytes는 byte limit을 적용할 때 multi-byte 문자를 중간에서

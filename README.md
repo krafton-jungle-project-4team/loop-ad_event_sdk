@@ -156,17 +156,20 @@ cache합니다.
 
 ## 디버그
 
-`debug: true`이면 콘솔 로그와 우측 하단 `LoopAd SDK` 버튼이 활성화됩니다. 패널에서는
-Connection의 project, schema version, revision, 등록 이벤트 수와 최근 50개 상태를
-확인할 수 있습니다.
+`debug: true`: 콘솔 로그, 우측 하단 `LoopAd SDK` 버튼
 
-- `validated`: Tracking Plan 검증 통과
-- `dropped`: identity 또는 schema 검증 단계에서 차단
-- `sent`: Collector가 이벤트를 수락
-- `failed`: Collector 요청 실패
+| 탭 | 확인할 수 있는 정보 |
+|---|---|
+| 개요 | Connection, identity, project, Collector, schema version, revision |
+| 스키마 | 이벤트별 필드, 타입, 필수 여부 |
+| 검증 | 차단 이벤트, 수정 항목 |
+| 요청 | 최근 50개 전송 상태, HTTP status, 요청 크기 |
 
-패널과 로그는 event name과 검증 사유만 기록합니다. event property 값과 Collector
-payload는 저장하거나 표시하지 않습니다. `destroy()`를 호출하면 패널도 제거됩니다.
+- Connection 실패: 개요 탭에 실패 사유
+- 검증·요청 문제: 탭과 버튼에 경고 배지
+- UI 상태: `localStorage`
+- 기록 제외: event property 값, Collector payload, identity 값
+- 패널 제거: `destroy()`
 
 ## DOM event
 
