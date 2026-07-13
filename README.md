@@ -106,7 +106,7 @@ sdk.track(
 | `connectionUrl` | yes | 없음 | Dashboard 공개 SDK connection URL |
 | `identity` | no | `null` | `{ userId, sessionId }` |
 | `context` | no | `{}` | 모든 이벤트 속성과 병합할 범용 JSON 객체 |
-| `debug` | no | `false` | drop 및 전송 실패 사유를 `console.warn`에 기록 |
+| `debug` | no | `false` | 콘솔 로그와 우측 하단 SDK DevTools 활성화 |
 | `autoTrackPageViews` | no | `true` | 최초 identity 설정과 SPA URL 변경 시 `page_view` 전송 |
 | `collectDomEvents` | no | `true` | annotation된 DOM event 수집 |
 
@@ -153,6 +153,20 @@ Tracking Plan이나 호출자 속성에서 사용할 수 없습니다. `__proto_
 connection 응답에 포함된 `events` snapshot이 검증 기준입니다. SDK는 별도 schema
 요청을 하지 않으며 connection URL별로 최대 5분 동안 유효한 응답을 메모리에
 cache합니다.
+
+## 디버그
+
+`debug: true`이면 콘솔 로그와 우측 하단 `LoopAd SDK` 버튼이 활성화됩니다. 패널에서는
+Connection의 project, schema version, revision, 등록 이벤트 수와 최근 50개 상태를
+확인할 수 있습니다.
+
+- `validated`: Tracking Plan 검증 통과
+- `dropped`: identity 또는 schema 검증 단계에서 차단
+- `sent`: Collector가 이벤트를 수락
+- `failed`: Collector 요청 실패
+
+패널과 로그는 event name과 검증 사유만 기록합니다. event property 값과 Collector
+payload는 저장하거나 표시하지 않습니다. `destroy()`를 호출하면 패널도 제거됩니다.
 
 ## DOM event
 

@@ -87,7 +87,7 @@ SDK는 tag와 아래 opt-in metadata만 `element` 시스템 속성에 기록합�
 
 사용자 입력값과 임의 DOM attribute는 수집하지 않습니다.
 
-## 5. drop 사유를 확인합니다
+## 5. 검증 상태를 확인합니다
 
 개발 환경에서 `debug: true`로 초기화합니다.
 
@@ -102,6 +102,9 @@ const sdk = await LoopAdEventSDK.init({
 });
 ```
 
+브라우저 우측 하단의 `LoopAd SDK` 버튼을 열면 검증 통과, drop, Collector 전송 성공과
+실패 상태를 확인할 수 있습니다. 같은 상태는 콘솔에도 기록됩니다.
+
 아래 조건이면 DOM event가 전송되지 않습니다.
 
 - identity가 없음
@@ -111,4 +114,5 @@ const sdk = await LoopAdEventSDK.init({
 - JSON attribute가 UTF-8 32 KiB 초과
 - 문자열 leaf가 신용카드 번호 또는 주민등록번호 형태
 
-warning에는 attribute 원문이나 탐지된 민감 문자열이 포함되지 않습니다.
+패널과 warning에는 attribute 원문, event property 값, 탐지된 민감 문자열이 포함되지
+않습니다.

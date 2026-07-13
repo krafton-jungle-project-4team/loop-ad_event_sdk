@@ -11,7 +11,9 @@ let eventRequests;
 let listeners;
 let currentUrl;
 let warnings;
+let infos;
 let originalWarn;
+let originalInfo;
 let urlSequence = 0;
 
 beforeEach(() => {
@@ -22,8 +24,11 @@ beforeEach(() => {
     listeners = new Map();
     currentUrl = new URL("https://shop.example/products/sku-1");
     warnings = [];
+    infos = [];
     originalWarn = console.warn;
+    originalInfo = console.info;
     console.warn = (...args) => warnings.push(args);
+    console.info = (...args) => infos.push(args);
 
     globalThis.location = createLocation();
     globalThis.window = createWindow();
@@ -47,6 +52,7 @@ beforeEach(() => {
 afterEach(() => {
     activeSdk?.destroy();
     console.warn = originalWarn;
+    console.info = originalInfo;
     delete globalThis.location;
     delete globalThis.window;
     delete globalThis.history;
@@ -163,6 +169,32 @@ test("drops events until identity is set", async () => {
 
     assert.equal(eventRequests.length, 0);
     assert.match(warnings[0][0], /identity is not set/);
+});
+
+test("shows validation and delivery status in debug DevTools without property values", async () => {
+    globalThis.document = createDebugDocument();
+    activeSdk = await start({ debug: true });
+
+    activeSdk.track("<invalid-event>", { secret: "must-not-appear" });
+    activeSdk.track("checkout_completed", validCheckout({ order_id: "private-order-id" }));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const host = document.body.children.find((element) => element.id === "loopad-sdk-devtools");
+    assert.ok(host);
+    const html = host.shadowRoot.innerHTML;
+    assert.match(html, /LoopAd SDK DevTools/);
+    assert.match(html, /tracking-plan\.v1/);
+    assert.match(html, /data-status="ready"/);
+    assert.match(html, /data-status="validated"/);
+    assert.match(html, /data-status="dropped"/);
+    assert.match(html, /data-status="sent"/);
+    assert.match(html, /&lt;invalid-event&gt;/);
+    assert.doesNotMatch(html, /must-not-appear|private-order-id/);
+    assert.match(JSON.stringify(infos), /initialized|validation|event sent/);
+
+    activeSdk.destroy();
+    assert.equal(document.body.children.length, 0);
 });
 
 test("enforces registered events, required fields, exact types, and closed objects", async () => {
@@ -622,6 +654,24 @@ function createDocument() {
     };
 }
 
+function createDebugDocument() {
+    const body = {
+        children: [],
+        appendChild(element) {
+            element.ownerBody = this;
+            this.children.push(element);
+            return element;
+        }
+    };
+    return {
+        ...createDocument(),
+        body,
+        createElement(tagName) {
+            return new FakeDebugHost(tagName);
+        }
+    };
+}
+
 function addListener(type, handler) {
     if (!listeners.has(type)) listeners.set(type, new Set());
     listeners.get(type).add(handler);
@@ -659,5 +709,36 @@ class FakeElement {
 
     matches(selector) {
         return selector === "[data-loopad-event]" && this.hasAttribute("data-loopad-event");
+    }
+}
+
+class FakeDebugHost {
+    constructor(tagName) {
+        this.tagName = tagName.toUpperCase();
+        this.id = "";
+        this.ownerBody = null;
+        this.shadowRoot = null;
+    }
+
+    attachShadow() {
+        this.shadowRoot = new FakeShadowRoot();
+        return this.shadowRoot;
+    }
+
+    remove() {
+        if (!this.ownerBody) return;
+        const index = this.ownerBody.children.indexOf(this);
+        if (index >= 0) this.ownerBody.children.splice(index, 1);
+        this.ownerBody = null;
+    }
+}
+
+class FakeShadowRoot {
+    constructor() {
+        this.innerHTML = "";
+    }
+
+    querySelector() {
+        return null;
     }
 }
