@@ -183,17 +183,47 @@ test("shows validation and delivery status in debug DevTools without property va
     const host = document.body.children.find((element) => element.id === "loopad-sdk-devtools");
     assert.ok(host);
     const html = host.shadowRoot.innerHTML;
-    assert.match(html, /LoopAd SDK DevTools/);
+    assert.match(html, /LoopAd SDK/);
+    assert.match(html, /data-tab="overview"[^>]*>개요/);
+    assert.match(html, /data-tab="schema"[^>]*>스키마/);
+    assert.match(html, /data-tab="validation"[^>]*>검증/);
+    assert.match(html, /data-tab="requests"[^>]*>요청/);
+    assert.match(html, /연결됨/);
     assert.match(html, /tracking-plan\.v1/);
-    assert.match(html, /data-status="ready"/);
-    assert.match(html, /data-status="validated"/);
-    assert.match(html, /data-status="dropped"/);
-    assert.match(html, /data-status="sent"/);
+    assert.match(html, /https:\/\/config\.test\/connections\/test\/schema/);
+    assert.match(html, /data-validation-status="blocked"/);
+    assert.doesNotMatch(html, /data-validation-status="passed"/);
+    assert.match(html, /data-request-status="blocked"/);
+    assert.match(html, /data-request-status="sent"/);
+    assert.match(html, /data-has-issues="true"/);
+    assert.match(html, /color-scheme: light/);
+    assert.match(html, /order_id/);
+    assert.match(html, /필수/);
+    assert.match(html, /이벤트 등록/);
     assert.match(html, /&lt;invalid-event&gt;/);
+    assert.doesNotMatch(html, /Collector accepted|Tracking Plan validation passed/);
     assert.doesNotMatch(html, /must-not-appear|private-order-id/);
     assert.match(JSON.stringify(infos), /initialized|validation|event sent/);
 
     activeSdk.destroy();
+    assert.equal(document.body.children.length, 0);
+});
+
+test("keeps DevTools available when Connection initialization fails", async () => {
+    globalThis.document = createDebugDocument();
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () => ({ ok: false, status: 403 });
+
+    await assert.rejects(start({ debug: true }), /HTTP 403/);
+
+    const host = document.body.children.find((element) => element.id === "loopad-sdk-devtools");
+    assert.ok(host);
+    assert.match(host.shadowRoot.innerHTML, /연결 실패/);
+    assert.match(host.shadowRoot.innerHTML, /HTTP 403/);
+    assert.match(host.shadowRoot.innerHTML, /data-has-issues="true"/);
+
+    globalThis.fetch = originalFetch;
+    activeSdk = await start();
     assert.equal(document.body.children.length, 0);
 });
 
@@ -740,5 +770,9 @@ class FakeShadowRoot {
 
     querySelector() {
         return null;
+    }
+
+    querySelectorAll() {
+        return [];
     }
 }
