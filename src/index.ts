@@ -1,65 +1,21 @@
 /**
- * SDK가 허용하는 JSON 안전 custom property 값입니다.
+ * Tracking Plan으로 검증할 JSON 안전 이벤트 속성 값입니다.
  *
- * 일반 JavaScript에서는 이 범위를 벗어난 값도 들어올 수 있지만, 최종
- * properties 객체를 JSON으로 만들 수 없으면 `serialize()`가 `{}`로 대체합니다.
+ * `null`, non-finite number, class instance처럼 현재 Tracking Plan subset이 표현하지
+ * 못하는 값은 runtime 검증에서 거부합니다.
  */
 export type EventPropertyValue =
     | string
     | number
     | boolean
-    | null
     | EventPropertyValue[]
     | { [key: string]: EventPropertyValue };
 
 /**
- * ClickHouse `properties_json`에 저장할 추가 이벤트 속성입니다.
- *
- * 분석에는 필요하지만 전용 top-level 컬럼이 없는 값을 여기에 넣습니다.
+ * `track()`과 SDK context가 받는 범용 이벤트 속성입니다.
  */
 export interface EventProperties {
     [key: string]: EventPropertyValue;
-}
-
-/**
- * ClickHouse `raw_events.properties_json`으로 들어가는 공통 이벤트 context입니다.
- *
- * `init({ context })`는 기본값을 제공하고, `setIdentity(identity, context)`는
- * 로그인 이후 공유 context를 갱신할 수 있으며, `track(name, fields)`는 단일 이벤트의
- * 값을 덮어쓸 수 있습니다.
- */
-export interface EventContext {
-    campaignId?: string | null;
-    promotionId?: string | null;
-    promotionRunId?: string | null;
-    adExperimentId?: string | null;
-    promotionChannel?: string | null;
-    segmentId?: string | null;
-    contentId?: string | null;
-    contentOptionId?: string | null;
-    creativeId?: string | null;
-    placementId?: string | null;
-    redirectId?: string | null;
-    landingType?: string | null;
-    landingUrl?: string | null;
-    targetUrl?: string | null;
-    hotelId?: string | null;
-    hotelCluster?: string | null;
-    hotelMarket?: string | null;
-    hotelCity?: string | null;
-    hotelCountry?: string | null;
-    checkinDate?: string | null;
-    checkoutDate?: string | null;
-    adultCount?: number | string | null;
-    childCount?: number | string | null;
-    price?: number | string | null;
-    breakfastIncluded?: boolean | number | string | null;
-    freeCancellation?: boolean | number | string | null;
-    roomType?: string | null;
-    bookingId?: string | null;
-    revenue?: number | string | null;
-    currency?: string | null;
-    device?: string | null;
 }
 
 /**
@@ -74,45 +30,27 @@ export interface Identity {
 }
 
 /**
- * `track()`이 받는 이벤트별 필드입니다.
- *
- * 이벤트명은 일반 문자열입니다. connection 초기화에서는 게시된 Tracking Plan이
- * 허용 여부를 결정하고, legacy 초기화에서는 비어 있지 않은 custom name도 허용합니다.
+ * `track()`의 이벤트 envelope 옵션입니다. 이벤트 속성과 분리해서 전달합니다.
  */
-export interface TrackFields extends EventContext {
-    eventId?: string | null;
-    eventTime?: string | number | Date | null;
-    properties?: EventProperties | null;
+export interface TrackOptions {
+    eventId?: string;
+    eventTime?: string | number | Date;
 }
 
 /**
  * SDK 시작 옵션입니다.
  *
- * connection 초기화는 Dashboard 응답의 Collector URL을 사용합니다. deprecated
- * legacy 초기화만 기존 고정 Collector endpoint를 계속 사용합니다.
+ * connection 초기화는 Dashboard 응답의 Collector URL과 Tracking Plan snapshot을
+ * 사용합니다.
  */
-interface CommonInitOptions {
+export interface InitOptions {
+    connectionUrl: string;
     identity?: Identity | null;
     debug?: boolean | null;
     autoTrackPageViews?: boolean | null;
     collectDomEvents?: boolean | null;
-    context?: EventContext | null;
+    context?: EventProperties | null;
 }
-
-/** @deprecated Prefer `init({ connectionUrl })` for published Tracking Plan validation. */
-export interface LegacyInitOptions extends CommonInitOptions {
-    projectId: string;
-    writeKey: string;
-    connectionUrl?: never;
-}
-
-export interface ConnectionInitOptions extends CommonInitOptions {
-    connectionUrl: string;
-    projectId?: never;
-    writeKey?: never;
-}
-
-export type InitOptions = LegacyInitOptions | ConnectionInitOptions;
 
 interface LoopAdEventPayload {
     project_id: string;
@@ -134,14 +72,14 @@ export interface LoopAdEventSdkClient {
      * identity가 없으면 이벤트를 queue에 넣지 않고 drop합니다. 로그인 이전 활동이
      * 나중에 로그인한 사용자에게 붙는 것을 막기 위한 정책입니다.
      */
-    track(eventName: string, fields?: TrackFields): void;
+    track(eventName: string, properties?: EventProperties, options?: TrackOptions): void;
     /**
      * 로그인 identity와 선택적인 공유 context를 설정합니다.
      *
      * identity가 처음 준비되는 순간 page auto-tracking이 켜져 있으면 현재 페이지를
      * `page_view`로 1회 기록합니다.
      */
-    setIdentity(identity: Identity, context?: EventContext | null): void;
+    setIdentity(identity: Identity, context?: EventProperties | null): void;
     /**
      * 로그아웃 시 identity를 비웁니다.
      *
@@ -167,22 +105,7 @@ export const version =
  * 작은 runtime client를 반환합니다. 이미 실행 중인 상태에서 다시 호출하면 기존
  * active client를 반환합니다.
  */
-export function init(options: ConnectionInitOptions): Promise<LoopAdEventSdkClient>;
-/** @deprecated Prefer the async connection URL overload. */
-export function init(options: LegacyInitOptions): LoopAdEventSdkClient;
-export function init(options: InitOptions): LoopAdEventSdkClient | Promise<LoopAdEventSdkClient> {
-    if (isConnectionInitOptions(options)) {
-        return initFromConnection(options);
-    }
-
-    return startRuntime(withDefaultInitOptions(options));
-}
-
-function isConnectionInitOptions(options: InitOptions): options is ConnectionInitOptions {
-    return typeof (options as ConnectionInitOptions).connectionUrl === "string";
-}
-
-async function initFromConnection(options: ConnectionInitOptions): Promise<LoopAdEventSdkClient> {
+export async function init(options: InitOptions): Promise<LoopAdEventSdkClient> {
     const connectionUrl = requiredHttpUrl(options.connectionUrl, "connectionUrl");
     const connection = await loadConnection(connectionUrl);
     return startRuntime(withConnectionInitOptions(options, connection));
@@ -210,8 +133,9 @@ declare const __SDK_VERSION__: string | undefined;
  */
 class Runtime {
     readonly client: LoopAdEventSdkClient = Object.freeze({
-        track: (eventName: string, fields?: TrackFields) => this.track(eventName, fields),
-        setIdentity: (identity: Identity, context?: EventContext | null) =>
+        track: (eventName: string, properties?: EventProperties, options?: TrackOptions) =>
+            this.track(eventName, properties, options),
+        setIdentity: (identity: Identity, context?: EventProperties | null) =>
             this.setIdentity(identity, context),
         clearIdentity: () => this.clearIdentity(),
         destroy: () => this.destroy()
@@ -249,7 +173,8 @@ class Runtime {
      */
     private track(
         eventName: string,
-        fields: TrackFields = {},
+        properties: EventProperties = {},
+        options: TrackOptions = {},
         previousUrl?: string,
         elementInfo?: { [key: string]: EventPropertyValue }
     ): void {
@@ -262,18 +187,6 @@ class Runtime {
             throw new Error("LoopAdEventSDK requires a non-empty event name.");
         }
 
-        // Segment/PostHog/Amplitude처럼 capture와 transport를 분리합니다.
-        // 다만 Loop Ad는 로그인 활동만 기록하므로 identity 이전 이벤트는 의도적으로
-        // drop합니다.
-        const draft = this.draft(normalizedEventName, fields, previousUrl, elementInfo);
-        const validationErrors = validateEventDraft(draft, this.config.events);
-        if (validationErrors.length > 0) {
-            warn(this.config.debug, "LoopAdEventSDK dropped an event that violates the Tracking Plan.", {
-                eventName: normalizedEventName,
-                reasons: validationErrors
-            });
-            return;
-        }
         const identity = this.config.identity;
 
         if (!identity) {
@@ -281,6 +194,36 @@ class Runtime {
             return;
         }
 
+        if (!isPlainObject(properties)) {
+            warn(this.config.debug, "LoopAdEventSDK dropped an event because properties must be a plain object.");
+            return;
+        }
+
+        const userProperties = {
+            ...this.config.baseContext,
+            ...this.config.identityContext,
+            ...properties
+        } as EventProperties;
+        const validationErrors = validateEventProperties(
+            normalizedEventName,
+            userProperties,
+            this.config.events
+        );
+        if (validationErrors.length > 0) {
+            warn(this.config.debug, "LoopAdEventSDK dropped an event that violates the Tracking Plan.", {
+                eventName: normalizedEventName,
+                reasons: validationErrors
+            });
+            return;
+        }
+
+        const draft = this.draft(
+            normalizedEventName,
+            userProperties,
+            options,
+            previousUrl,
+            elementInfo
+        );
         this.send(this.payload(draft, identity));
     }
 
@@ -291,14 +234,14 @@ class Runtime {
      */
     private draft(
         eventName: string,
-        fields: TrackFields,
+        userProperties: EventProperties,
+        options: TrackOptions,
         previousUrl?: string,
         elementInfo?: { [key: string]: EventPropertyValue }
     ): EventDraft {
         const pageInfo = page(previousUrl);
         const properties: EventProperties = {
-            ...propertiesFromContext(cleanContext({ ...this.config.context, ...fields })),
-            ...(fields.properties ?? {}),
+            ...userProperties,
             page_path: text(pageInfo.path) ?? "",
             page: pageInfo,
             sdk: { name: SDK_NAME, version }
@@ -310,8 +253,8 @@ class Runtime {
 
         return {
             eventName,
-            eventId: text(fields.eventId) ?? id("evt"),
-            eventTime: eventTime(fields.eventTime),
+            eventId: text(options.eventId) ?? id("evt"),
+            eventTime: eventTime(options.eventTime),
             properties
         };
     }
@@ -339,12 +282,18 @@ class Runtime {
             return;
         }
 
+        const body = JSON.stringify(payload);
+        if (utf8ByteLength(body) > MAX_REQUEST_BODY_BYTES) {
+            warn(this.config.debug, "LoopAdEventSDK dropped an event because the request body is too large.");
+            return;
+        }
+
         void fetch(this.config.collectorUrl, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             credentials: "omit",
             keepalive: true,
-            body: JSON.stringify(payload)
+            body
         })
             .then((response) => {
                 if (!response.ok) {
@@ -360,13 +309,10 @@ class Runtime {
      * 첫 identity 전환 시 현재 페이지를 자동 기록하므로 public `pageView()` API가
      * 필요하지 않습니다.
      */
-    private setIdentity(identity: Identity, context?: EventContext | null): void {
+    private setIdentity(identity: Identity, context?: EventProperties | null): void {
         const hadIdentity = this.config.identity !== null;
         this.config.identity = normalizeIdentity(identity);
-
-        if (context) {
-            this.setContext(context);
-        }
+        this.config.identityContext = context ? copyPropertyObject(context) : {};
 
         if (!hadIdentity && this.config.autoTrackPageViews) {
             this.trackPageView();
@@ -376,14 +322,7 @@ class Runtime {
     /** 로그아웃 이후 이벤트가 미래 사용자에게 붙지 않도록 identity를 제거합니다. */
     private clearIdentity(): void {
         this.config.identity = null;
-    }
-
-    /** 이후 이벤트에 사용할 공유 context를 병합합니다. */
-    private setContext(context: EventContext): void {
-        this.config.context = cleanContext({
-            ...this.config.context,
-            ...context
-        });
+        this.config.identityContext = {};
     }
 
     /** annotation이 붙은 요소를 수집하기 위해 document-level delegation을 등록합니다. */
@@ -416,9 +355,16 @@ class Runtime {
             return;
         }
 
-        const fields = fieldsFromElement(element);
+        const parsed = propertiesFromElement(element);
+        if (!parsed.ok) {
+            warn(this.config.debug, "LoopAdEventSDK dropped a DOM event with invalid data-loopad-properties.", {
+                eventName,
+                reason: parsed.reason
+            });
+            return;
+        }
         const elementInfo = elementProperties(element);
-        this.track(eventName, fields, undefined, elementInfo);
+        this.track(eventName, parsed.properties, {}, undefined, elementInfo);
     };
 
     /** SPA URL 변경이 page view를 만들 수 있도록 History API를 patch합니다. */
@@ -460,7 +406,7 @@ class Runtime {
 
     /** 현재 페이지를 표준 `page_view` 이벤트로 수집합니다. */
     private trackPageView(previousUrl?: string): void {
-        this.track("page_view", {}, previousUrl);
+        this.track("page_view", {}, {}, previousUrl);
     }
 
     /** listener를 제거하고 patch한 browser API를 원복합니다. */
@@ -500,10 +446,11 @@ interface DefaultInitOptions {
     debug: boolean;
     autoTrackPageViews: boolean;
     collectDomEvents: boolean;
-    context: EventContext;
+    baseContext: EventProperties;
+    identityContext: EventProperties;
     collectorUrl: string;
     schemaVersion: string;
-    events: ReadonlyMap<string, TrackingPlanEvent> | null;
+    events: ReadonlyMap<string, TrackingPlanEvent>;
 }
 
 interface EventDraft {
@@ -514,27 +461,19 @@ interface EventDraft {
 }
 
 const SDK_NAME = "loop-ad_event_sdk";
-const SCHEMA_VERSION = "hotel_rec_promo.v1";
 const SOURCE = "browser_sdk";
-const INGEST_ENDPOINT = "https://event.api.dev.loop-ad.org";
 const MAX_CONNECTION_CACHE_TTL_MS = 5 * 60 * 1000;
+const MAX_SCHEMA_DEPTH = 8;
+const MAX_SCHEMA_NODES = 100;
+const MAX_DOM_PROPERTIES_BYTES = 32 * 1024;
+const MAX_REQUEST_BODY_BYTES = 256 * 1024;
 const DOM_SELECTOR = "[data-loopad-event]";
 const DOM_EVENTS = ["click", "change", "submit"] as const;
 const TEXT_LIMIT_BYTES = 160;
-const ATTRIBUTION_STORAGE_KEY = "loopad.attribution.v1";
-const ATTRIBUTION_QUERY_PARAMS: ReadonlyArray<readonly [keyof EventContext, string]> = [
-    ["campaignId", "loopad_campaign_id"],
-    ["promotionId", "loopad_promotion_id"],
-    ["promotionRunId", "loopad_promotion_run_id"],
-    ["adExperimentId", "loopad_ad_experiment_id"],
-    ["promotionChannel", "loopad_channel"],
-    ["segmentId", "loopad_segment_id"],
-    ["contentId", "loopad_content_id"],
-    ["contentOptionId", "loopad_content_option_id"],
-    ["creativeId", "loopad_creative_id"],
-    ["placementId", "loopad_placement_id"],
-    ["redirectId", "loopad_redirect_id"]
-];
+const RESERVED_PROPERTY_NAMES = new Set(["page_path", "page", "sdk", "element"]);
+const DANGEROUS_PROPERTY_NAMES = new Set(["__proto__", "prototype", "constructor"]);
+const CREDIT_CARD_PATTERN = /^(?:(?:4[0-9]{12}(?:[0-9]{3})?)|(?:5[1-5][0-9]{14})|(?:6(?:011|5[0-9]{2})[0-9]{12})|(?:3[47][0-9]{13})|(?:3(?:0[0-5]|[68][0-9])[0-9]{11})|(?:(?:2131|1800|35[0-9]{3})[0-9]{11}))$/;
+const SSN_PATTERN = /^\d{3}-?\d{2}-?\d{4}$/;
 
 let active: Runtime | null = null;
 
@@ -566,57 +505,10 @@ interface SdkConnection {
 
 const connectionCache = new Map<string, { value: SdkConnection; expiresAt: number }>();
 
-/**
- * 시작 옵션을 완성된 runtime config로 정규화합니다.
- *
- * Event Collector endpoint는 application runtime 설정이 아니라 infra contract이므로
- * endpoint 옵션은 의도적으로 받지 않습니다.
- */
-function withDefaultInitOptions(options: LegacyInitOptions): DefaultInitOptions {
-    const projectId = text(options?.projectId);
-    const writeKey = text(options?.writeKey);
-
-    if (!projectId) {
-        throw new Error("LoopAdEventSDK requires a non-empty projectId.");
-    }
-    if (!writeKey) {
-        throw new Error("LoopAdEventSDK requires a non-empty writeKey.");
-    }
-
-    const context = cleanContext({
-        ...(options.context ?? {}),
-        ...resolveAttributionContext()
-    });
-    if (!context.device) {
-        context.device = detectDevice() ?? null;
-    }
-
-    return {
-        projectId,
-        writeKey,
-        identity: identityFromInit(options),
-        debug: options.debug ?? false,
-        autoTrackPageViews: options.autoTrackPageViews ?? true,
-        collectDomEvents: options.collectDomEvents ?? true,
-        context,
-        collectorUrl: INGEST_ENDPOINT,
-        schemaVersion: SCHEMA_VERSION,
-        events: null
-    };
-}
-
 function withConnectionInitOptions(
-    options: ConnectionInitOptions,
+    options: InitOptions,
     connection: SdkConnection
 ): DefaultInitOptions {
-    const context = cleanContext({
-        ...(options.context ?? {}),
-        ...resolveAttributionContext()
-    });
-    if (!context.device) {
-        context.device = detectDevice() ?? null;
-    }
-
     return {
         projectId: connection.projectId,
         writeKey: connection.writeKey,
@@ -624,7 +516,8 @@ function withConnectionInitOptions(
         debug: options.debug ?? false,
         autoTrackPageViews: options.autoTrackPageViews ?? true,
         collectDomEvents: options.collectDomEvents ?? true,
-        context,
+        baseContext: options.context ? copyPropertyObject(options.context) : {},
+        identityContext: {},
         collectorUrl: connection.collectorUrl,
         schemaVersion: connection.schemaVersion,
         events: new Map(connection.events.map((event) => [event.eventName, event]))
@@ -709,17 +602,38 @@ function parseTrackingPlanEvent(value: unknown, index: number): TrackingPlanEven
     if (description !== undefined && typeof description !== "string") {
         throw new Error(`LoopAdEventSDK connection init failed: events[${index}].description must be a string.`);
     }
+    const propertiesSchema = parseTrackingPlanSchema(
+        record.propertiesSchema,
+        `events[${index}].propertiesSchema`,
+        { nodes: 0 },
+        0
+    );
+    if (propertiesSchema.type !== "object") {
+        throw new Error(
+            `LoopAdEventSDK connection init failed: events[${index}].propertiesSchema must be an object.`
+        );
+    }
     return {
         eventName: requiredString(record.eventName, `events[${index}].eventName`),
         ...(description ? { description } : {}),
-        propertiesSchema: parseTrackingPlanSchema(
-            record.propertiesSchema,
-            `events[${index}].propertiesSchema`
-        )
+        propertiesSchema
     };
 }
 
-function parseTrackingPlanSchema(value: unknown, path: string): TrackingPlanSchema {
+function parseTrackingPlanSchema(
+    value: unknown,
+    path: string,
+    state: { nodes: number },
+    depth: number
+): TrackingPlanSchema {
+    state.nodes += 1;
+    if (state.nodes > MAX_SCHEMA_NODES) {
+        throw new Error(`LoopAdEventSDK connection init failed: ${path} exceeds ${MAX_SCHEMA_NODES} schema nodes.`);
+    }
+    if (depth > MAX_SCHEMA_DEPTH) {
+        throw new Error(`LoopAdEventSDK connection init failed: ${path} exceeds depth ${MAX_SCHEMA_DEPTH}.`);
+    }
+
     const record = objectRecord(value, path);
     const allowedKeys = new Set(["type", "properties", "required", "items"]);
     const unsupportedKey = Object.keys(record).find((key) => !allowedKeys.has(key));
@@ -733,13 +647,27 @@ function parseTrackingPlanSchema(value: unknown, path: string): TrackingPlanSche
     }
 
     if (type === "object") {
+        if (record.items !== undefined) {
+            throw new Error(`LoopAdEventSDK connection init failed: ${path}.items is unsupported for objects.`);
+        }
         const propertiesRecord = objectRecord(record.properties ?? {}, `${path}.properties`);
         const properties: Record<string, TrackingPlanSchema> = {};
         for (const [name, schema] of Object.entries(propertiesRecord)) {
-            if (!name.trim()) {
-                throw new Error(`LoopAdEventSDK connection init failed: ${path} has an empty property name.`);
+            if (!name.trim() || name !== name.trim()) {
+                throw new Error(`LoopAdEventSDK connection init failed: ${path} has an invalid property name.`);
             }
-            properties[name] = parseTrackingPlanSchema(schema, `${path}.properties.${name}`);
+            if (DANGEROUS_PROPERTY_NAMES.has(name)) {
+                throw new Error(`LoopAdEventSDK connection init failed: ${path}.properties.${name} is unsafe.`);
+            }
+            if (depth === 0 && RESERVED_PROPERTY_NAMES.has(name)) {
+                throw new Error(`LoopAdEventSDK connection init failed: ${path}.properties.${name} is reserved.`);
+            }
+            properties[name] = parseTrackingPlanSchema(
+                schema,
+                `${path}.properties.${name}`,
+                state,
+                depth + 1
+            );
         }
 
         const requiredValue = record.required ?? [];
@@ -747,40 +675,71 @@ function parseTrackingPlanSchema(value: unknown, path: string): TrackingPlanSche
             throw new Error(`LoopAdEventSDK connection init failed: ${path}.required must be a string array.`);
         }
         const required = requiredValue as string[];
-        if (required.some((name) => !(name in properties))) {
+        if (required.some((name) => !Object.prototype.hasOwnProperty.call(properties, name))) {
             throw new Error(`LoopAdEventSDK connection init failed: ${path}.required references an unknown property.`);
         }
-        return { type, properties, required: [...new Set(required)] };
+        if (new Set(required).size !== required.length) {
+            throw new Error(`LoopAdEventSDK connection init failed: ${path}.required contains duplicates.`);
+        }
+        return { type, properties, required };
     }
 
     if (type === "array") {
+        if (record.properties !== undefined || record.required !== undefined) {
+            throw new Error(`LoopAdEventSDK connection init failed: ${path} cannot define object fields.`);
+        }
         if (record.items === undefined) {
             throw new Error(`LoopAdEventSDK connection init failed: ${path}.items is required for arrays.`);
         }
-        return { type, items: parseTrackingPlanSchema(record.items, `${path}.items`) };
+        return {
+            type,
+            items: parseTrackingPlanSchema(record.items, `${path}.items`, state, depth + 1)
+        };
     }
 
+    if (record.properties !== undefined || record.required !== undefined || record.items !== undefined) {
+        throw new Error(`LoopAdEventSDK connection init failed: ${path} cannot define nested fields.`);
+    }
     return { type: type as JsonSchemaType };
 }
 
-function validateEventDraft(
-    draft: EventDraft,
-    events: ReadonlyMap<string, TrackingPlanEvent> | null
+function validateEventProperties(
+    eventName: string,
+    properties: EventProperties,
+    events: ReadonlyMap<string, TrackingPlanEvent>
 ): string[] {
-    if (!events) return [];
-    const event = events.get(draft.eventName);
-    if (!event) return [`event ${draft.eventName} is not registered`];
-    return validateSchemaValue(draft.properties, event.propertiesSchema, "properties");
+    const event = events.get(eventName);
+    if (!event) return [`event ${eventName} is not registered`];
+    return validateSchemaValue(properties, event.propertiesSchema, "properties", 0);
 }
 
-function validateSchemaValue(value: unknown, schema: TrackingPlanSchema, path: string): string[] {
+function validateSchemaValue(
+    value: unknown,
+    schema: TrackingPlanSchema,
+    path: string,
+    depth: number,
+    stack: Set<object> = new Set()
+): string[] {
     switch (schema.type) {
         case "object": {
-            if (typeof value !== "object" || value === null || Array.isArray(value)) {
+            if (!isPlainObject(value)) {
                 return [`${path} must be an object`];
             }
-            const record = value as Record<string, unknown>;
+            if (stack.has(value)) {
+                return [`${path} must not be circular`];
+            }
+            stack.add(value);
+            const record = value;
             const errors: string[] = [];
+            for (const name of Object.keys(record)) {
+                if (depth === 0 && RESERVED_PROPERTY_NAMES.has(name)) {
+                    errors.push(`${path}.${name} is reserved`);
+                } else if (DANGEROUS_PROPERTY_NAMES.has(name)) {
+                    errors.push(`${path}.${name} is unsafe`);
+                } else if (!Object.prototype.hasOwnProperty.call(schema.properties ?? {}, name)) {
+                    errors.push(`${path}.${name} is not declared`);
+                }
+            }
             for (const name of schema.required ?? []) {
                 if (!Object.prototype.hasOwnProperty.call(record, name) || record[name] === undefined) {
                     errors.push(`${path}.${name} is required`);
@@ -788,16 +747,36 @@ function validateSchemaValue(value: unknown, schema: TrackingPlanSchema, path: s
             }
             for (const [name, propertySchema] of Object.entries(schema.properties ?? {})) {
                 if (Object.prototype.hasOwnProperty.call(record, name) && record[name] !== undefined) {
-                    errors.push(...validateSchemaValue(record[name], propertySchema, `${path}.${name}`));
+                    errors.push(
+                        ...validateSchemaValue(
+                            record[name],
+                            propertySchema,
+                            `${path}.${name}`,
+                            depth + 1,
+                            stack
+                        )
+                    );
                 }
             }
+            stack.delete(value);
             return errors;
         }
-        case "array":
+        case "array": {
             if (!Array.isArray(value)) return [`${path} must be an array`];
-            return value.flatMap((item, index) =>
-                validateSchemaValue(item, schema.items as TrackingPlanSchema, `${path}[${index}]`)
+            if (stack.has(value)) return [`${path} must not be circular`];
+            stack.add(value);
+            const errors = value.flatMap((item, index) =>
+                validateSchemaValue(
+                    item,
+                    schema.items as TrackingPlanSchema,
+                    `${path}[${index}]`,
+                    depth + 1,
+                    stack
+                )
             );
+            stack.delete(value);
+            return errors;
+        }
         case "string":
             return typeof value === "string" ? [] : [`${path} must be a string`];
         case "number":
@@ -814,6 +793,14 @@ function objectRecord(value: unknown, path: string): Record<string, unknown> {
         throw new Error(`LoopAdEventSDK connection init failed: ${path} must be an object.`);
     }
     return value as Record<string, unknown>;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+        return false;
+    }
+    const prototype = Object.getPrototypeOf(value);
+    return prototype === Object.prototype || prototype === null;
 }
 
 function requiredString(value: unknown, path: string): string {
@@ -853,7 +840,7 @@ function requiredHttpUrl(value: unknown, path: string): string {
 }
 
 /** 시작 시 전달된 identity를 해석하고, 로그인 전이면 `null`을 반환합니다. */
-function identityFromInit(options: CommonInitOptions): Identity | null {
+function identityFromInit(options: InitOptions): Identity | null {
     if (options.identity) {
         return normalizeIdentity(options.identity);
     }
@@ -875,218 +862,60 @@ function normalizeIdentity(identity: Identity): Identity {
     return { userId, sessionId };
 }
 
-// 참고: 성숙한 분석 SDK들은 payload shaping 전에 작은 context 객체를 정규화해서
-// transport payload 생성을 예측 가능하게 유지합니다.
-// https://github.com/amplitude/Amplitude-TypeScript/blob/main/packages/analytics-core/src/core-client.ts
-function cleanContext(context: EventContext): EventContext {
-    return {
-        campaignId: text(context.campaignId) ?? null,
-        promotionId: text(context.promotionId) ?? null,
-        promotionRunId: text(context.promotionRunId) ?? null,
-        adExperimentId: text(context.adExperimentId) ?? null,
-        promotionChannel: text(context.promotionChannel) ?? null,
-        segmentId: text(context.segmentId) ?? null,
-        contentId: text(context.contentId) ?? null,
-        contentOptionId: text(context.contentOptionId) ?? null,
-        creativeId: text(context.creativeId) ?? null,
-        placementId: text(context.placementId) ?? null,
-        redirectId: text(context.redirectId) ?? null,
-        landingType: text(context.landingType) ?? null,
-        landingUrl: text(context.landingUrl) ?? null,
-        targetUrl: text(context.targetUrl) ?? null,
-        hotelId: text(context.hotelId) ?? null,
-        hotelCluster: text(context.hotelCluster) ?? null,
-        hotelMarket: text(context.hotelMarket) ?? null,
-        hotelCity: text(context.hotelCity) ?? null,
-        hotelCountry: text(context.hotelCountry) ?? null,
-        checkinDate: text(context.checkinDate) ?? null,
-        checkoutDate: text(context.checkoutDate) ?? null,
-        adultCount: integerText(context.adultCount) ?? null,
-        childCount: integerText(context.childCount) ?? null,
-        price: decimalText(context.price) ?? null,
-        breakfastIncluded: flagText(context.breakfastIncluded) ?? null,
-        freeCancellation: flagText(context.freeCancellation) ?? null,
-        roomType: text(context.roomType) ?? null,
-        bookingId: text(context.bookingId) ?? null,
-        revenue: decimalText(context.revenue) ?? null,
-        currency: text(context.currency) ?? null,
-        device: text(context.device) ?? null,
-    };
-}
-
-function propertiesFromContext(context: EventContext): EventProperties {
-    const properties: EventProperties = {};
-
-    setProperty(properties, "campaign_id", context.campaignId);
-    setProperty(properties, "promotion_id", context.promotionId);
-    setProperty(properties, "promotion_run_id", context.promotionRunId);
-    setProperty(properties, "ad_experiment_id", context.adExperimentId);
-    setProperty(properties, "promotion_channel", context.promotionChannel);
-    setProperty(properties, "segment_id", context.segmentId);
-    setProperty(properties, "content_id", context.contentId);
-    setProperty(properties, "content_option_id", context.contentOptionId);
-    setProperty(properties, "creative_id", context.creativeId);
-    setProperty(properties, "placement_id", context.placementId);
-    setProperty(properties, "redirect_id", context.redirectId);
-    setProperty(properties, "landing_type", context.landingType);
-    setProperty(properties, "landing_url", context.landingUrl);
-    setProperty(properties, "target_url", context.targetUrl);
-    setProperty(properties, "hotel_id", context.hotelId);
-    setProperty(properties, "hotel_cluster", context.hotelCluster);
-    setProperty(properties, "hotel_market", context.hotelMarket);
-    setProperty(properties, "hotel_city", context.hotelCity);
-    setProperty(properties, "hotel_country", context.hotelCountry);
-    setProperty(properties, "checkin_date", context.checkinDate);
-    setProperty(properties, "checkout_date", context.checkoutDate);
-    setProperty(properties, "adult_count", context.adultCount);
-    setProperty(properties, "child_count", context.childCount);
-    setProperty(properties, "price", context.price);
-    setProperty(properties, "breakfast_included", context.breakfastIncluded);
-    setProperty(properties, "free_cancellation", context.freeCancellation);
-    setProperty(properties, "room_type", context.roomType);
-    setProperty(properties, "booking_id", context.bookingId);
-    setProperty(properties, "revenue", context.revenue);
-    setProperty(properties, "currency", context.currency);
-    setProperty(properties, "device", context.device);
-
-    return properties;
-}
-
-function resolveAttributionContext(): EventContext {
-    const urlContext = cleanContext(attributionContextFromUrl());
-
-    if (hasContextValues(urlContext)) {
-        writeStoredAttributionContext(urlContext);
-        return urlContext;
+function copyPropertyObject(value: unknown): EventProperties {
+    if (!isPlainObject(value)) {
+        throw new Error("LoopAdEventSDK context must be a plain object.");
     }
-
-    return readStoredAttributionContext();
+    return { ...value } as EventProperties;
 }
 
-function attributionContextFromUrl(): EventContext {
-    const context: EventContext = {};
+type DomPropertiesResult =
+    | { ok: true; properties: EventProperties }
+    | { ok: false; reason: string };
 
-    for (const candidateUrl of attributionCandidateUrls()) {
-        let url: URL;
-
-        try {
-            url = new URL(candidateUrl);
-        } catch {
-            continue;
-        }
-
-        for (const [contextKey, queryKey] of ATTRIBUTION_QUERY_PARAMS) {
-            const value = text(url.searchParams.get(queryKey));
-            if (value) {
-                context[contextKey] = value;
-            }
-        }
-    }
-
-    return context;
-}
-
-function attributionCandidateUrls(): string[] {
-    const candidates = [href()];
-
-    try {
-        const referrer = text(document?.referrer);
-        if (referrer) {
-            candidates.unshift(referrer);
-        }
-    } catch {
-        // document can be unavailable in non-browser test/runtime environments.
-    }
-
-    return candidates;
-}
-
-function readStoredAttributionContext(): EventContext {
-    try {
-        const stored = safeSessionStorage()?.getItem(ATTRIBUTION_STORAGE_KEY);
-        if (!stored) {
-            return {};
-        }
-
-        const parsed = JSON.parse(stored);
-        return isRecord(parsed) ? cleanContext(parsed as EventContext) : {};
-    } catch {
-        return {};
-    }
-}
-
-function writeStoredAttributionContext(context: EventContext): void {
-    try {
-        const compact = compactContext(context);
-        if (Object.keys(compact).length === 0) {
-            return;
-        }
-
-        safeSessionStorage()?.setItem(ATTRIBUTION_STORAGE_KEY, JSON.stringify(compact));
-    } catch {
-        // Storage can be unavailable in private mode or embedded browser contexts.
-    }
-}
-
-function compactContext(context: EventContext): EventContext {
-    const compact: EventContext = {};
-
-    for (const [contextKey] of ATTRIBUTION_QUERY_PARAMS) {
-        const value = text(context[contextKey]);
-        if (value) {
-            compact[contextKey] = value;
-        }
-    }
-
-    return compact;
-}
-
-function hasContextValues(context: EventContext): boolean {
-    return Object.values(compactContext(context)).some(
-        (value) => value !== null && value !== undefined && value !== ""
-    );
-}
-
-function safeSessionStorage(): Storage | null {
-    try {
-        return typeof sessionStorage === "undefined" ? null : sessionStorage;
-    } catch {
-        return null;
-    }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-    return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function setProperty(properties: EventProperties, key: string, value: EventPropertyValue | undefined): void {
-    if (value !== null && value !== undefined && value !== "") {
-        properties[key] = value;
-    }
-}
-
-// 참고: PostHog autocapture는 allowlist된 DOM metadata만 추출하고 기본적으로
-// 민감한 form value를 피합니다.
+// PostHog처럼 DOM property는 명시적으로 opt-in한 attribute만 읽습니다. Loop Ad는
+// Tracking Plan의 JSON type을 보존하기 위해 하나의 JSON object attribute를 사용합니다.
 // https://github.com/PostHog/posthog-js/blob/main/packages/browser/src/autocapture.ts
-function fieldsFromElement(element: Element): TrackFields {
-    const fields: Record<string, unknown> = {};
-
-    for (const [key, attribute] of TEXT_ATTRIBUTES) {
-        const value = attr(element, attribute);
-        if (value) fields[key] = value;
+function propertiesFromElement(element: Element): DomPropertiesResult {
+    const raw = element.getAttribute("data-loopad-properties");
+    if (raw === null) {
+        return { ok: true, properties: {} };
+    }
+    if (utf8ByteLength(raw) > MAX_DOM_PROPERTIES_BYTES) {
+        return { ok: false, reason: `attribute exceeds ${MAX_DOM_PROPERTIES_BYTES} bytes` };
     }
 
-    for (const [key, attribute] of NUMBER_ATTRIBUTES) {
-        const value = numberOrNull(attr(element, attribute));
-        if (value !== null) fields[key] = value;
+    let parsed: unknown;
+    try {
+        parsed = JSON.parse(raw);
+    } catch {
+        return { ok: false, reason: "attribute is not valid JSON" };
     }
-
-    const properties = domProperties(element);
-    if (Object.keys(properties).length > 0) {
-        fields.properties = properties;
+    if (!isPlainObject(parsed)) {
+        return { ok: false, reason: "attribute root must be an object" };
     }
+    if (containsSensitiveDomValue(parsed)) {
+        return { ok: false, reason: "attribute contains a sensitive-looking value" };
+    }
+    return { ok: true, properties: { ...parsed } as EventProperties };
+}
 
-    return fields as TrackFields;
+function containsSensitiveDomValue(value: unknown): boolean {
+    const pending = [value];
+    while (pending.length > 0) {
+        const current = pending.pop();
+        if (typeof current === "string") {
+            const compact = current.trim().replace(/[- ]/g, "");
+            if (CREDIT_CARD_PATTERN.test(compact) || SSN_PATTERN.test(current.trim())) {
+                return true;
+            }
+        } else if (Array.isArray(current)) {
+            pending.push(...current);
+        } else if (isPlainObject(current)) {
+            pending.push(...Object.values(current));
+        }
+    }
+    return false;
 }
 
 // 참고: PostHog autocapture는 후보 node마다 handler를 등록하지 않고 event target에서
@@ -1111,42 +940,6 @@ function domListenEvent(element: Element): string {
     if (tag === "select") return "change";
     if (tag === "input" && ["checkbox", "radio"].includes(type)) return "change";
     return "click";
-}
-
-// 참고: PostHog autocapture는 임의 DOM state를 직렬화하지 않고 안전한 element
-// attribute/property 목록을 명시적으로 유지합니다.
-// https://github.com/PostHog/posthog-js/blob/main/packages/browser/src/autocapture.ts
-function domProperties(element: Element): EventProperties {
-    const properties: EventProperties = {};
-
-    for (const attributeName of attributeNames(element)) {
-        if (!attributeName.startsWith("data-loopad-prop-")) {
-            continue;
-        }
-
-        const propertyName = attributeName.slice("data-loopad-prop-".length).replace(/-/g, "_");
-        if (!propertyName) {
-            continue;
-        }
-
-        const value = attr(element, attributeName);
-        if (value !== null) {
-            properties[propertyName] = value;
-        }
-    }
-
-    return properties;
-}
-
-// 참고: PostHog autocapture는 element metadata 수집 시 구형 browser guard를 둡니다.
-// 이 함수도 modern API와 fallback 형태를 함께 둡니다.
-// https://github.com/PostHog/posthog-js/blob/main/packages/browser/src/autocapture.ts
-function attributeNames(element: Element): string[] {
-    if (typeof element.getAttributeNames === "function") {
-        return element.getAttributeNames();
-    }
-
-    return Array.from(element.attributes ?? []).map((attribute) => attribute.name);
 }
 
 // 참고: visible text에는 민감한 사용자 데이터가 섞일 수 있어 PostHog autocapture도
@@ -1203,7 +996,7 @@ function href(): string {
 // 참고: Amplitude의 event construction은 caller event option을 받으면서도
 // SDK가 생성한 timestamp를 정규화합니다.
 // https://github.com/amplitude/Amplitude-TypeScript/blob/main/packages/analytics-core/src/core-client.ts
-function eventTime(value: TrackFields["eventTime"]): string {
+function eventTime(value: TrackOptions["eventTime"]): string {
     if (value instanceof Date && Number.isFinite(value.getTime())) {
         return value.toISOString();
     }
@@ -1228,47 +1021,6 @@ function text(value: unknown): string | undefined {
     return normalized || undefined;
 }
 
-// 참고: currency.js는 precision 처리 전에 외부 값을 parse하고 invalid number를
-// 거릅니다. 이 helper는 SDK의 numeric gate입니다.
-// https://github.com/scurker/currency.js/blob/main/src/currency.js
-function numberOrNull(value: unknown): number | null {
-    if (value === null || value === undefined || value === "") {
-        return null;
-    }
-
-    const normalized = typeof value === "number" ? value : Number(value);
-    return Number.isFinite(normalized) ? normalized : null;
-}
-
-function integerText(value: unknown): string | undefined {
-    const normalized = numberOrNull(value);
-    if (normalized === null) return undefined;
-    return String(Math.max(0, Math.trunc(normalized)));
-}
-
-function decimalText(value: unknown): string | undefined {
-    const normalized = numberOrNull(value);
-    if (normalized === null) return undefined;
-    return String(Math.round(normalized * 100) / 100);
-}
-
-function flagText(value: unknown): string | undefined {
-    if (typeof value === "boolean") {
-        return value ? "1" : "0";
-    }
-
-    const normalized = numberOrNull(value);
-    if (normalized !== null) {
-        return normalized === 0 ? "0" : "1";
-    }
-
-    const stringValue = text(value)?.toLowerCase();
-    if (!stringValue) return undefined;
-    if (["true", "yes", "y"].includes(stringValue)) return "1";
-    if (["false", "no", "n"].includes(stringValue)) return "0";
-    return undefined;
-}
-
 // 참고: PostHog autocapture는 DOM attribute를 읽기 전에 EventTarget/Element 형태를
 // 방어적으로 확인합니다.
 // https://github.com/PostHog/posthog-js/blob/main/packages/browser/src/autocapture.ts
@@ -1282,7 +1034,7 @@ function isElement(value: unknown): value is Element {
 }
 
 // 참고: uuid v4는 crypto 기반 randomness를 우선합니다. 이 SDK도 가능하면
-// crypto.randomUUID를 쓰고, test/legacy 환경에서만 fallback을 사용합니다.
+// crypto.randomUUID를 쓰고, 지원하지 않는 환경에서만 fallback을 사용합니다.
 // https://github.com/uuidjs/uuid/blob/main/src/v4.ts
 function id(prefix: string): string {
     const value =
@@ -1298,29 +1050,12 @@ function attr(element: Element, name: string): string | null {
     return element.getAttribute(name)?.trim() || null;
 }
 
-// 참고: 분석 SDK들은 user-agent 기반 device detection을 authoritative identity나
-// targeting data가 아니라 best-effort fallback으로 다룹니다.
-// https://github.com/amplitude/Amplitude-TypeScript/blob/main/packages/analytics-browser/src/browser-client.ts
-function detectDevice(): string | undefined {
-    if (typeof navigator === "undefined") {
-        return undefined;
-    }
-
-    const ua = navigator.userAgent.toLowerCase();
-    if (/ipad|tablet/.test(ua)) return "tablet";
-    if (/mobi|iphone|android/.test(ua)) return "mobile";
-    return "desktop";
+function serialize(properties: EventProperties): string {
+    return JSON.stringify(properties);
 }
 
-// 참고: 성숙한 SDK transport는 잘못된 custom property 하나가 전체 capture path를
-// 깨뜨리지 않도록 JSON serialization을 방어합니다.
-// https://github.com/PostHog/posthog-js/blob/main/packages/browser/src/request-queue.ts
-function serialize(properties: EventProperties): string {
-    try {
-        return JSON.stringify(properties);
-    } catch {
-        return "{}";
-    }
+function utf8ByteLength(value: string): number {
+    return new TextEncoder().encode(value).length;
 }
 
 // 참고: truncate-utf8-bytes는 byte limit을 적용할 때 multi-byte 문자를 중간에서
@@ -1345,55 +1080,3 @@ function warn(debug: boolean, message: string, ...details: unknown[]): void {
         console.warn(message, ...details);
     }
 }
-
-/**
- * DOM autocapture에서 문자열 property로 읽을 `data-loopad-*` attribute 매핑입니다.
- *
- * 각 tuple은 `[TrackFields key, HTML attribute name]` 형태입니다.
- * `fieldsFromElement()`가 이 표를 순회해 명시적으로 붙은 attribute만 읽고,
- * 값이 비어 있지 않을 때만 event fields에 복사합니다.
- */
-const TEXT_ATTRIBUTES = [
-    ["campaignId", "data-loopad-campaign-id"],
-    ["promotionId", "data-loopad-promotion-id"],
-    ["promotionRunId", "data-loopad-promotion-run-id"],
-    ["adExperimentId", "data-loopad-ad-experiment-id"],
-    ["promotionChannel", "data-loopad-channel"],
-    ["segmentId", "data-loopad-segment-id"],
-    ["contentId", "data-loopad-content-id"],
-    ["contentOptionId", "data-loopad-content-option-id"],
-    ["creativeId", "data-loopad-creative-id"],
-    ["placementId", "data-loopad-placement-id"],
-    ["redirectId", "data-loopad-redirect-id"],
-    ["landingType", "data-loopad-landing-type"],
-    ["landingUrl", "data-loopad-landing-url"],
-    ["targetUrl", "data-loopad-target-url"],
-    ["hotelId", "data-loopad-hotel-id"],
-    ["hotelCluster", "data-loopad-hotel-cluster"],
-    ["hotelMarket", "data-loopad-hotel-market"],
-    ["hotelCity", "data-loopad-hotel-city"],
-    ["hotelCountry", "data-loopad-hotel-country"],
-    ["checkinDate", "data-loopad-checkin-date"],
-    ["checkoutDate", "data-loopad-checkout-date"],
-    ["bookingId", "data-loopad-booking-id"],
-    ["currency", "data-loopad-currency"],
-    ["roomType", "data-loopad-room-type"],
-    ["breakfastIncluded", "data-loopad-breakfast-included"],
-    ["freeCancellation", "data-loopad-free-cancellation"],
-    ["device", "data-loopad-device"]
-] as const;
-
-/**
- * DOM autocapture에서 숫자로 해석한 뒤 문자열 property로 보관할 `data-loopad-*`
- * attribute 매핑입니다.
- *
- * 숫자 field는 `numberOrNull()`을 통과한 finite number만 event fields에 들어갑니다.
- * 이후 payload 생성 시 ClickHouse `JSONExtractString` 기반 view와 맞도록
- * `properties_json` 안에 문자열 값으로 정규화됩니다.
- */
-const NUMBER_ATTRIBUTES = [
-    ["adultCount", "data-loopad-adult-count"],
-    ["childCount", "data-loopad-child-count"],
-    ["price", "data-loopad-price"],
-    ["revenue", "data-loopad-revenue"]
-] as const;
