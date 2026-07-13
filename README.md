@@ -1,95 +1,29 @@
-# loop-ad_event_sdk
+# Loop Ad Event SDK
 
-Loop Ad Event SDK는 고객사 웹사이트 또는 데모 쇼핑몰 프론트엔드에서 사용자 행동
-이벤트를 수집해 Event Collector public API endpoint로 보내는 브라우저 SDK입니다.
+브라우저에서 임의의 제품 도메인 이벤트를 수집하는 Tracking Plan 기반 SDK입니다.
+SDK는 특정 이벤트명이나 속성명을 내장하지 않습니다. Dashboard에 게시된 connection
+snapshot을 읽고 이벤트명과 JSON 속성을 런타임에 검증합니다.
 
-SDK는 앱 시작 시 바로 붙일 수 있지만 `userId`와 `sessionId`가 준비되기 전에는
-Event Collector로 전송하지 않습니다. 로그인 이전 활동은 메모리에 보관하지 않고
-drop하며, `setIdentity()`가 처음 identity를 설정하면 현재 페이지를 자동으로
-`page_view` 기록합니다.
-
-## 참고한 계약
-
-- `loop-ad_infra/docs/app-repository-guide.md`: 앱 repo는 인프라를 직접 만들지
-  않고 정해진 public domain contract를 따른다. connection 초기화는 Dashboard가
-  반환한 Collector URL을 사용하고 legacy 초기화는 기존
-  `https://event.api.dev.loop-ad.org` endpoint를 유지한다.
-- ClickHouse `raw_events` 테이블: `hotel_rec_promo.v1` 원천 이벤트를 저장한다.
-
-## 참고한 SDK 패턴
-
-SDK 구성은 Segment Analytics Next, PostHog JS, Amplitude Browser SDK의 공통
-구조를 참고했습니다.
-
-- Segment Analytics Next: public API, identity store, queue, page lifecycle을
-  분리하는 방식을 참고한다.
-- PostHog JS: document-level autocapture와 안전한 속성 수집 방식을 참고한다.
-- Amplitude Browser SDK: identity/session setter와 default tracking 경계를
-  참고한다.
-
-자세한 비교 분석은 루트의 [수집 SDK 분석 시리즈](resources_collection-sdk-analysis-series.md)에
-따로 정리할 예정입니다.
-
-## 사용 방식
-
-SDK는 두 가지 방식으로 붙일 수 있습니다.
-
-- npm package: 앱 번들러에서 `import { init } ...` 형태로 사용합니다.
-- script tag: 빌드된 IIFE bundle을 `<script src="...">`로 직접 불러옵니다.
-
-script tag 방식은 Shopify 앱, CMS, 정적 HTML, 외부 고객사 페이지처럼 npm build
-pipeline에 SDK를 직접 넣기 어려운 경우를 위한 경로입니다.
-
-## 설치와 배포
-
-이 패키지는 GitHub Packages npm registry에
-`@krafton-jungle-project-4team/loop-ad_event_sdk` 이름으로 배포합니다. PR이
-`main`에 merge되면 GitHub Actions가 KST 날짜와 workflow run number를 조합해
-`0.1.YYYYMMDD-run.N.A` 형식의 버전을 만들고 publish합니다.
-
-같은 workflow가 browser IIFE bundle도 GitHub Pages로 배포합니다. public repo에서
-Pages 배포가 한 번 성공하면 아래 URL을 script tag에서 바로 사용할 수 있습니다.
-
-```text
-https://krafton-jungle-project-4team.github.io/loop-ad_event_sdk/loop-ad-event-sdk.iife.js
-```
-
-설치하는 프로젝트의 `.npmrc`에 GitHub Packages registry를 추가합니다.
+## 설치
 
 ```text
 @krafton-jungle-project-4team:registry=https://npm.pkg.github.com
 ```
 
-그 다음 패키지를 설치합니다.
-
 ```bash
 npm install @krafton-jungle-project-4team/loop-ad_event_sdk
 ```
 
-로컬 또는 데모에서 browser bundle을 직접 만들 때는 아래 명령을 사용합니다.
+script tag가 필요하면 GitHub Pages의 IIFE bundle을 사용할 수 있습니다.
 
-```bash
-npm install
-npm run build
+```html
+<script src="https://krafton-jungle-project-4team.github.io/loop-ad_event_sdk/loop-ad-event-sdk.iife.js"></script>
 ```
 
-생성되는 산출물:
+## 초기화
 
-```text
-dist/index.mjs
-dist/index.cjs
-dist/loop-ad-event-sdk.iife.js
-dist/types/index.d.ts
-```
-
-`dist/`는 빌드 산출물이므로 git에는 커밋하지 않습니다.
-
-## Tracking Plan 연결 (권장)
-
-Dashboard가 제공한 connection URL로 SDK를 비동기 초기화합니다. SDK는 게시된 이벤트
-계약을 runtime에서 검증하고, connection 응답의 제한된 TTL 동안 schema를 메모리에
-cache합니다. connection 조회 실패, non-2xx 응답, 잘못된 응답 계약은 `init()` 실패로
-호출자에게 전달됩니다.
+`init()`은 Dashboard가 발급한 공개 connection URL만 받습니다. connection 조회 또는
+계약 검증이 실패하면 Promise가 reject됩니다.
 
 ```js
 import { init } from "@krafton-jungle-project-4team/loop-ad_event_sdk";
@@ -97,310 +31,174 @@ import { init } from "@krafton-jungle-project-4team/loop-ad_event_sdk";
 const sdk = await init({
   connectionUrl:
     "https://dashboard.api.dev.loop-ad.org/api/public/v1/sdk/connections/public_sdk_key",
-  debug: import.meta.env.DEV,
+  identity: {
+    userId: currentUser.id,
+    sessionId: currentSession.id
+  },
   context: {
-    promotionChannel: "onsite_banner",
-    device: "mobile"
-  }
+    application_version: "2026.07"
+  },
+  debug: import.meta.env.DEV
 });
 ```
 
-인증 상태가 준비되면 앱의 auth/session layer가 identity를 주입합니다.
+identity를 나중에 알게 되는 앱은 로그인 또는 세션 복구 후 설정합니다.
 
 ```js
-const user = await fetchMe();
-
-if (user) {
-  sdk.setIdentity({
-    userId: user.id,
-    sessionId: user.session.id
-  });
-}
+sdk.setIdentity(
+  {
+    userId: currentUser.id,
+    sessionId: currentSession.id
+  },
+  {
+    application_version: "2026.07"
+  }
+);
 ```
 
-로그인/회원가입 성공 콜백에서도 같은 방식으로 호출합니다.
-
-```js
-async function onSignupSuccess(result) {
-  sdk.setIdentity({
-    userId: result.user.id,
-    sessionId: result.session.id
-  }, {
-    hotelMarket: result.lastSearchMarket
-  });
-
-  sdk.track("signup_completed");
-}
-```
-
-로그아웃 시에는 identity를 비웁니다.
+로그아웃할 때는 `clearIdentity()`를 호출합니다. identity가 없는 동안 발생한 이벤트는
+queue에 보관하지 않고 버립니다.
 
 ```js
 sdk.clearIdentity();
 ```
 
-### Client methods
+## 이벤트 전송
+
+두 번째 인자는 Tracking Plan으로 검증할 JSON 속성이고 세 번째 인자는 이벤트 envelope
+옵션입니다. 속성의 문자열, 유한한 숫자, boolean, 배열, 중첩 객체 타입은 그대로
+보존됩니다.
+
+```js
+sdk.track(
+  "checkout_completed",
+  {
+    order_id: "order-123",
+    amount: 129000.5,
+    quantity: 2,
+    refundable: true,
+    tags: ["mobile", "new"],
+    item: {
+      sku: "sku-1",
+      count: 2
+    }
+  },
+  {
+    eventId: "evt_123",
+    eventTime: new Date()
+  }
+);
+```
+
+### Client API
 
 | method | 설명 |
 |---|---|
-| `track(eventName, fields?)` | 문자열 이벤트명을 수집합니다. identity가 없으면 queue에 넣지 않고 drop합니다. |
-| `setIdentity(identity, context?)` | `{ userId, sessionId }`를 설정하고 선택적으로 공유 context를 갱신합니다. 최초 identity 설정 시 현재 페이지를 `page_view`로 1회 기록합니다. |
-| `clearIdentity()` | 로그아웃 시 identity를 제거합니다. 이후 이벤트는 새 identity가 들어오기 전까지 drop됩니다. |
-| `destroy()` | DOM listener와 History API patch를 정리합니다. 테스트, hot reload, microfrontend unmount에서 사용합니다. |
+| `track(eventName, properties?, options?)` | 등록된 이벤트를 검증하고 전송합니다. |
+| `setIdentity(identity, context?)` | `{ userId, sessionId }`와 선택적인 공유 속성을 설정합니다. |
+| `clearIdentity()` | identity와 identity context를 제거합니다. |
+| `destroy()` | DOM 및 History API listener를 제거합니다. |
 
-### Init options
+### InitOptions
 
 | option | 필수 | 기본값 | 설명 |
 |---|---:|---|---|
-| `connectionUrl` | yes | 없음 | Dashboard가 발급한 공개 SDK connection URL |
-| `identity` | no | `null` | 앱 시작 시 이미 로그인 상태를 알고 있을 때 전달하는 `{ userId, sessionId }` |
-| `context` | no | `{}` | 이후 이벤트의 `properties_json`에 공통으로 붙일 promotion, hotel, device 등 domain context |
-| `debug` | no | `false` | drop, send fail 같은 SDK 내부 경고를 console에 출력 |
-| `autoTrackPageViews` | no | `true` | init identity 또는 최초 `setIdentity()` 시 현재 페이지를 기록하고 SPA URL 변경을 추적 |
-| `collectDomEvents` | no | `true` | `data-loopad-event`가 붙은 DOM event를 document delegation으로 수집 |
+| `connectionUrl` | yes | 없음 | Dashboard 공개 SDK connection URL |
+| `identity` | no | `null` | `{ userId, sessionId }` |
+| `context` | no | `{}` | 모든 이벤트 속성과 병합할 범용 JSON 객체 |
+| `debug` | no | `false` | drop 및 전송 실패 사유를 `console.warn`에 기록 |
+| `autoTrackPageViews` | no | `true` | 최초 identity 설정과 SPA URL 변경 시 `page_view` 전송 |
+| `collectDomEvents` | no | `true` | annotation된 DOM event 수집 |
 
-Tracking Plan에 없는 이벤트명, 필수 속성 누락, 속성 타입 오류는 Collector로 보내지
-않습니다. `debug: true`일 때 drop 이유를 `console.warn`으로 확인할 수 있고,
-`debug: false`인 production에서는 해당 warning을 출력하지 않습니다.
+context도 이벤트 속성입니다. context의 각 key는 이를 사용하는 모든 이벤트 schema에
+선언되어야 합니다. 병합 순서는 init context, identity context, `track()` properties
+순서이며 뒤의 값이 앞의 값을 덮어씁니다.
 
-## Legacy 초기화
+## Tracking Plan 검증
 
-기존 `init({ projectId, writeKey })`는 호환성을 위해 유지하지만 deprecated 경로입니다.
-이 경로는 게시된 Tracking Plan을 조회하지 않으므로 client-side schema validation을
-수행하지 않습니다.
-
-```js
-const sdk = init({
-  projectId: "demo-shoppingmall",
-  writeKey: "public_write_key"
-});
-```
-
-## script tag 사용
-
-GitHub Pages로 배포된 IIFE bundle을 직접 불러올 수 있습니다.
-
-```html
-<script src="https://krafton-jungle-project-4team.github.io/loop-ad_event_sdk/loop-ad-event-sdk.iife.js"></script>
-<script>
-  const sdk = await LoopAdEventSDK.init({
-    connectionUrl:
-      "https://dashboard.api.dev.loop-ad.org/api/public/v1/sdk/connections/public_sdk_key"
-  });
-
-  window.onAuthReady = function (user, session) {
-    sdk.setIdentity({
-      userId: user.id,
-      sessionId: session.id
-    });
-  };
-</script>
-```
-
-운영에서 자체 CDN, S3/CloudFront, 정적 파일 서버를 쓰고 싶으면
-`dist/loop-ad-event-sdk.iife.js`를 같은 방식으로 올려서 사용합니다. 로컬 예시는
-[examples/basic.html](examples/basic.html)을 참고합니다.
-
-## 이벤트명
-
-`track()`의 첫 번째 인자는 문자열입니다. connection 초기화 경로에서는 게시된
-Tracking Plan에 등록된 이벤트만 전송합니다. Legacy 초기화 경로에서는 기존처럼
-비어 있지 않은 custom event name을 허용합니다.
-
-Loop Ad 분석과 추천 파이프라인에서는 호출자가 정한 이벤트명을 사용합니다.
-이벤트명은 영어, 한국어 또는 다른 비어 있지 않은 문자열일 수 있습니다.
-
-```text
-page_view
-배너_노출
-배너_클릭
-리다이렉트_클릭
-랜딩_진입
-hotel_search
-hotel_click
-hotel_detail_view
-booking_start
-booking_complete
-booking_cancel
-```
-
-고객사 서비스에서 필요한 커스텀 이벤트도 전송할 수 있습니다.
-
-```js
-sdk.track("signup_completed");
-sdk.track("배너_호버", { campaignId: "summer-2026" });
-```
-
-이벤트 속성 검증은 JSON Schema의 `object`, `string`, `number`, `integer`, `boolean`,
-`array`, `required` subset만 지원합니다.
-
-## DOM attribute 수집
-
-마크업에 `data-loopad-event`를 붙이면 SDK가 document event delegation으로
-수집합니다. identity가 준비되기 전이면 전송하지 않고 drop합니다.
-
-```html
-<button
-  data-loopad-event="배너_클릭"
-  data-loopad-campaign-id="camp_summer_2026"
-  data-loopad-promotion-id="promo_banner_001"
-  data-loopad-promotion-run-id="run_banner_001"
-  data-loopad-ad-experiment-id="ad_exp_banner_001"
-  data-loopad-segment-id="seg_repeat_hotel"
-  data-loopad-content-id="content_banner_001"
-  data-loopad-content-option-id="option_a"
-  data-loopad-channel="onsite_banner"
-  data-loopad-creative-id="content-banner-001"
-  data-loopad-hotel-id="hotel_123"
-  data-loopad-hotel-cluster="42"
-  data-loopad-hotel-market="1001"
-  data-loopad-price="129000"
-  data-loopad-breakfast-included="true"
-  data-loopad-free-cancellation="false"
-  data-loopad-room-type="deluxe"
->
-  View hotel deal
-</button>
-```
-
-지원 attribute 예시:
-
-```text
-data-loopad-campaign-id
-data-loopad-promotion-id
-data-loopad-promotion-run-id
-data-loopad-ad-experiment-id
-data-loopad-channel
-data-loopad-creative-id
-data-loopad-segment-id
-data-loopad-content-id
-data-loopad-content-option-id
-data-loopad-placement-id
-data-loopad-landing-type
-data-loopad-hotel-id
-data-loopad-hotel-cluster
-data-loopad-hotel-market
-data-loopad-hotel-city
-data-loopad-hotel-country
-data-loopad-checkin-date
-data-loopad-checkout-date
-data-loopad-adult-count
-data-loopad-child-count
-data-loopad-price
-data-loopad-booking-id
-data-loopad-revenue
-data-loopad-currency
-data-loopad-room-type
-data-loopad-breakfast-included
-data-loopad-free-cancellation
-data-loopad-device
-```
-
-추가 속성은 `data-loopad-prop-*`로 보낼 수 있습니다.
-
-```html
-<button
-  data-loopad-event="배너_노출"
-  data-loopad-campaign-id="camp_summer_2026"
-  data-loopad-prop-slot="main_banner"
->
-  Summer deal
-</button>
-```
-
-수집 event type은 기본적으로 요소 종류에 따라 정해집니다.
-
-```text
-form              -> submit
-select            -> change
-input checkbox    -> change
-input radio       -> change
-그 외 요소        -> click
-```
-
-다른 browser event를 듣고 싶으면 `data-loopad-listen`을 명시합니다.
-
-```html
-<form data-loopad-event="booking_start" data-loopad-listen="submit">
-  ...
-</form>
-```
-
-SDK는 버튼 텍스트를 기본 수집하지 않습니다. 필요할 때만 아래처럼 명시합니다.
-
-```html
-<button data-loopad-event="배너_클릭" data-loopad-label="hero_cta">
-  Start
-</button>
-```
-
-## Identity gate
-
-기본 정책은 아래와 같습니다.
-
-```js
-const sdk = init({ projectId: "demo-shoppingmall", writeKey: "public_write_key" });
-
-sdk.track("hotel_detail_view", { hotelId: "hotel-before-login" }); // dropped
-
-sdk.setIdentity({
-  userId: "user-1",
-  sessionId: "session-1"
-}); // current page_view is sent once
-
-sdk.track("hotel_detail_view", { hotelId: "hotel-after-login" }); // sent
-```
-
-- `userId`, `sessionId` 없이는 이벤트를 전송하지 않는다.
-- 로그인 이전 활동은 SDK가 메모리에 보관하지 않는다.
-- `setIdentity()`: 이후 이벤트에 사용할 `userId`, `sessionId`를 설정하고 현재
-  페이지를 1회 자동 기록한다.
-- `clearIdentity()`: logout 후 identity 없는 이벤트를 다시 drop한다.
-- 예외적으로 page view를 직접 보내야 하면 별도 API 대신
-  `track("page_view")`를 사용한다.
-
-JWT, access token, refresh token은 SDK 옵션이나 이벤트 payload에 넣지 않습니다.
-SDK는 anonymous id를 만들지 않습니다.
-
-## Payload 형식
-
-SDK는 Event Collector로 아래처럼 `hotel_rec_promo.v1` common envelope JSON을
-전송합니다. connection 초기화는 검증된 connection 응답의 `collectorUrl`을,
-legacy 초기화는 기존 `https://event.api.dev.loop-ad.org`를 사용합니다.
-
-`properties_json`에는 기본적으로 page 정보와 SDK 정보가 들어가며, DOM 수집 시
-promotion/hotel domain 값, element metadata, `data-loopad-prop-*` 값이 함께
-들어갑니다.
+지원하는 schema subset은 `object`, `string`, `number`, `integer`, `boolean`, `array`,
+`properties`, `required`, `items`입니다.
 
 ```json
 {
-  "project_id": "demo-shoppingmall",
-  "write_key": "public_write_key",
-  "schema_version": "hotel_rec_promo.v1",
-  "event_id": "evt_...",
-  "event_name": "hotel_detail_view",
-  "event_time": "2026-06-27T10:00:00.000Z",
-  "source": "browser_sdk",
-  "user_id": "user-123",
-  "session_id": "session-123",
-  "properties_json": "{\"campaign_id\":\"camp_summer_2026\",\"hotel_cluster\":\"42\",\"page_path\":\"/hotels/123\",\"page\":...,\"sdk\":...}"
+  "eventName": "checkout_completed",
+  "description": "결제가 끝난 시점",
+  "propertiesSchema": {
+    "type": "object",
+    "properties": {
+      "order_id": { "type": "string" },
+      "amount": { "type": "number" },
+      "item": {
+        "type": "object",
+        "properties": {
+          "sku": { "type": "string" },
+          "count": { "type": "integer" }
+        },
+        "required": ["sku", "count"]
+      }
+    },
+    "required": ["order_id", "amount", "item"]
+  }
 }
 ```
 
-## 개인정보와 보안
+객체는 모든 depth에서 폐쇄형입니다. schema에 없는 key, 미등록 이벤트, 필수 key
+누락, 잘못된 타입, `null`, `NaN`, 순환 참조는 전송 전에 거부됩니다. schema 자체도
+최대 depth 8, 최대 node 100으로 제한합니다.
 
-- SDK는 input, textarea, select 값을 자동으로 읽지 않습니다.
-- 버튼 텍스트도 기본 수집하지 않습니다.
-- visible text가 꼭 필요하면 `data-loopad-text="true"` 또는
-  `data-loopad-label`을 명시합니다.
-- secret, DB credential, API key, JWT는 브라우저 SDK 옵션에 넣지 않습니다.
-- connection URL과 write key는 공개 값이며 인증 수단이 아닙니다. Origin 검사는
-  브라우저 오용 방지 장치일 뿐, 조작 가능한 Origin을 신뢰하는 인증이 아닙니다.
+`page_path`, `page`, `sdk`, `element`는 SDK가 추가하는 최상위 시스템 속성이므로
+Tracking Plan이나 호출자 속성에서 사용할 수 없습니다. `__proto__`, `prototype`,
+`constructor`는 모든 depth에서 거부됩니다.
 
-운영 적용 전에는 고객사 서비스의 동의 화면, 개인정보 처리방침, 보관 기간,
-국가별 규제 요구사항을 별도로 검토해야 합니다.
+connection 응답에 포함된 `events` snapshot이 검증 기준입니다. SDK는 별도 schema
+요청을 하지 않으며 connection URL별로 최대 5분 동안 유효한 응답을 메모리에
+cache합니다.
 
-## 개발과 기여
+## DOM event
 
-로컬 개발, 검증, 문서 변경 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)를 봅니다.
-SDK 비교/분석처럼 분량이 커지는 글만 루트 Markdown 파일로 별도 관리합니다.
+DOM 속성은 `data-loopad-properties` 하나만 사용합니다. 값은 JSON object여야 하며
+Tracking Plan과 같은 타입 검증을 거칩니다.
+
+```html
+<button
+  data-loopad-event="product_selected"
+  data-loopad-properties='{"product_id":"sku-1","position":3,"featured":true,"labels":["new"]}'
+>
+  Select
+</button>
+```
+
+SDK는 `data-loopad-properties` 외의 event property attribute를 읽지 않습니다.
+자세한 적용 방법은
+[DOM 이벤트 수집 가이드](guide_dom-event-tracking.md)를 참고합니다.
+
+## 자동 속성
+
+검증을 통과한 호출자 속성 뒤에 SDK가 아래 시스템 정보를 붙입니다.
+
+- `page_path`: 현재 URL path
+- `page`: URL, path, title, referrer, 이전 URL
+- `sdk`: SDK 이름과 버전
+- `element`: DOM event가 발생한 element의 제한된 metadata
+
+Collector envelope의 `project_id`, `write_key`, `collectorUrl`, `schema_version`은
+connection 응답에서 가져옵니다. SDK source는 `browser_sdk`입니다.
+
+## 제한과 보안
+
+- DOM JSON attribute: UTF-8 32 KiB 이하
+- Collector request body: UTF-8 256 KiB 이하
+- DOM 문자열 값이 신용카드 번호 또는 주민등록번호 형태로 보이면 event drop
+- DOM visible text는 기본 수집하지 않으며 `data-loopad-label` 또는
+  `data-loopad-text="true"`로 명시한 경우에만 최대 160 bytes 수집
+- debug warning에는 DOM 원문을 포함하지 않음
+
+## 개발
+
+```bash
+npm install
+npm run verify
+```
+
+빌드 결과는 `dist/index.mjs`, `dist/index.cjs`,
+`dist/loop-ad-event-sdk.iife.js`, `dist/types/index.d.ts`입니다.

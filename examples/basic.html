@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="ko">
+<html lang="en">
     <head>
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -7,48 +7,38 @@
     </head>
     <body>
         <button
-            data-loopad-event="배너_클릭"
-            data-loopad-campaign-id="camp_summer_2026"
-            data-loopad-promotion-id="promo_banner_001"
-            data-loopad-promotion-run-id="run_banner_001"
-            data-loopad-ad-experiment-id="ad_exp_banner_001"
-            data-loopad-segment-id="seg_repeat_hotel"
-            data-loopad-content-id="content_banner_001"
-            data-loopad-content-option-id="option_a"
-            data-loopad-channel="onsite_banner"
-            data-loopad-creative-id="content_banner_001"
-            data-loopad-hotel-id="hotel_123"
-            data-loopad-hotel-cluster="42"
-            data-loopad-hotel-market="1001"
-            data-loopad-price="12900"
-            data-loopad-prop-slot="hotel_detail"
+            data-loopad-event="product_selected"
+            data-loopad-id="primary-product"
+            data-loopad-properties='{"product_id":"sku-1","position":1,"featured":true,"labels":["new"]}'
         >
-            View hotel deal
+            Select
         </button>
 
         <script src="../dist/loop-ad-event-sdk.iife.js"></script>
         <script>
-            const sdk = LoopAdEventSDK.init({
-                projectId: "demo-shoppingmall",
-                writeKey: "public_write_key",
-                debug: true,
-                context: {
-                    promotionChannel: "onsite_banner",
-                    device: "desktop"
-                }
-            });
+            void (async () => {
+                const sdk = await LoopAdEventSDK.init({
+                    connectionUrl:
+                        "https://dashboard.api.dev.loop-ad.org/api/public/v1/sdk/connections/public_sdk_key",
+                    identity: {
+                        userId: "example-user",
+                        sessionId: "example-session"
+                    },
+                    debug: true
+                });
 
-            sdk.setIdentity({
-                userId: "demo-user-1",
-                sessionId: "demo-session-1"
-            });
-
-            sdk.track("hotel_detail_view", {
-                hotelId: "hotel_123",
-                hotelCluster: "42",
-                hotelMarket: "1001",
-                price: 12900
-            });
+                sdk.track("checkout_completed", {
+                    order_id: "order-1",
+                    amount: 129000,
+                    quantity: 2,
+                    refundable: true,
+                    tags: ["example"],
+                    item: {
+                        sku: "sku-1",
+                        count: 2
+                    }
+                });
+            })();
         </script>
     </body>
 </html>
