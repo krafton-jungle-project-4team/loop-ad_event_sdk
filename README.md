@@ -198,8 +198,10 @@ SDK는 `data-loopad-properties` 외의 event property attribute를 읽지 않습
 - `sdk`: SDK 이름과 버전
 - `element`: DOM event가 발생한 element의 제한된 metadata
 
-Collector envelope의 `project_id`, `write_key`, `collectorUrl`, `schema_version`은
-connection 응답에서 가져옵니다. SDK source는 `browser_sdk`입니다.
+Collector envelope의 `project_id`, `write_key`, `collectorUrl`은 connection 응답에서
+가져옵니다. connection의 `schemaVersion`은 Tracking Plan 형식에 사용하며, 이벤트
+envelope의 `schema_version`은 Collector 계약인 `hotel_rec_promo.v1`을 사용합니다.
+SDK source는 `browser_sdk`입니다.
 
 ## 제한과 보안
 

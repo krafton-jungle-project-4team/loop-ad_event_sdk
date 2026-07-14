@@ -199,7 +199,7 @@ class Runtime {
         this.debugPanel?.start();
         info(this.config.debug, "LoopAdEventSDK initialized.", {
             projectId: this.config.projectId,
-            schemaVersion: this.config.schemaVersion,
+            trackingPlanSchemaVersion: this.config.trackingPlanSchemaVersion,
             revision: this.config.revision,
             registeredEvents: this.config.events.size
         });
@@ -337,7 +337,7 @@ class Runtime {
         return {
             project_id: this.config.projectId,
             write_key: this.config.writeKey,
-            schema_version: this.config.schemaVersion,
+            schema_version: EVENT_ENVELOPE_SCHEMA_VERSION,
             event_id: draft.eventId,
             event_name: draft.eventName,
             event_time: draft.eventTime,
@@ -600,7 +600,7 @@ interface DefaultInitOptions {
     baseContext: EventProperties;
     identityContext: EventProperties;
     collectorUrl: string;
-    schemaVersion: string;
+    trackingPlanSchemaVersion: string;
     revision: number;
     events: ReadonlyMap<string, TrackingPlanEvent>;
 }
@@ -614,6 +614,8 @@ interface EventDraft {
 
 const SDK_NAME = "loop-ad_event_sdk";
 const SOURCE = "browser_sdk";
+/** Tracking Plan 형식과 독립적으로 Collector가 검증하는 event envelope 계약입니다. */
+const EVENT_ENVELOPE_SCHEMA_VERSION = "hotel_rec_promo.v1";
 const MAX_CONNECTION_CACHE_TTL_MS = 5 * 60 * 1000;
 const MAX_SCHEMA_DEPTH = 8;
 const MAX_SCHEMA_NODES = 100;
@@ -672,7 +674,7 @@ function withConnectionInitOptions(
         baseContext: options.context ? copyPropertyObject(options.context) : {},
         identityContext: {},
         collectorUrl: connection.collectorUrl,
-        schemaVersion: connection.schemaVersion,
+        trackingPlanSchemaVersion: connection.schemaVersion,
         revision: connection.revision,
         events: new Map(connection.events.map((event) => [event.eventName, event]))
     };
