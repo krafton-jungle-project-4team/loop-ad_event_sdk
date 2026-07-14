@@ -101,6 +101,17 @@ test("loads the connection and sends a canonical page_view when identity is read
     assert.equal(properties.sdk.name, "loop-ad_event_sdk");
 });
 
+test("keeps the collector envelope schema separate from the tracking plan schema", async () => {
+    connection.schemaVersion = "tracking-plan.v2";
+    activeSdk = await start();
+
+    activeSdk.track("page_view");
+
+    assert.equal(eventRequests.length, 1);
+    assert.equal(eventRequests[0].body.schema_version, "hotel_rec_promo.v1");
+    assert.notEqual(eventRequests[0].body.schema_version, connection.schemaVersion);
+});
+
 test("preserves nested JSON types and separates envelope options", async () => {
     activeSdk = await start();
 
@@ -627,7 +638,7 @@ function assertCanonicalEnvelope(body) {
     ].sort());
     assert.equal(body.project_id, connection.projectId);
     assert.equal(body.write_key, connection.writeKey);
-    assert.equal(body.schema_version, connection.schemaVersion);
+    assert.equal(body.schema_version, "hotel_rec_promo.v1");
     assert.equal(body.source, "browser_sdk");
 }
 
