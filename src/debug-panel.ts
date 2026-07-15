@@ -1,3 +1,8 @@
+import type {
+    LoopAdSourceManifest,
+    LoopAdSourceReference
+} from "./source-manifest";
+
 export type SdkDebugConnectionStatus = "connecting" | "connected" | "failed";
 export type SdkDebugValidationStatus = "passed" | "blocked";
 export type SdkDebugRequestStatus = "pending" | "sent" | "blocked" | "failed";
@@ -28,6 +33,13 @@ export interface SdkDebugConnectionMeta {
     schemaVersion: string;
     revision: number;
     events: readonly SdkDebugEventSchema[];
+    sourceManifest: SdkDebugSourceManifestState;
+}
+
+export interface SdkDebugSourceManifestState {
+    status: "loaded" | "unavailable" | "failed";
+    message: string;
+    manifest?: LoopAdSourceManifest;
 }
 
 export interface SdkDebugRequestRecord {
@@ -79,7 +91,9 @@ interface RequestRecord extends Required<Pick<SdkDebugRequestRecord, "requestId"
     updatedAt: number;
 }
 
-type DebugTab = "overview" | "schema" | "validation" | "requests";
+type EventRuntimeStatus = SdkDebugRequestStatus | "called" | "unobserved";
+
+type DebugTab = "overview" | "diagnostics" | "schema" | "validation" | "requests";
 
 const MAX_DEBUG_RECORDS = 50;
 const MAX_REASON_LENGTH = 240;
@@ -244,7 +258,9 @@ class BrowserSdkDebugPanel implements SdkDebugPanel {
         const requestProblems = this.requests.filter(
             (record) => record.status === "blocked" || record.status === "failed"
         ).length;
-        const problemCount = requestProblems + (this.connection.status === "failed" ? 1 : 0);
+        const diagnosticProblems = this.diagnosticProblemCount();
+        const problemCount =
+            requestProblems + diagnosticProblems + (this.connection.status === "failed" ? 1 : 0);
         const hasProblems = problemCount > 0;
 
         this.shadow.innerHTML = `
@@ -269,9 +285,10 @@ class BrowserSdkDebugPanel implements SdkDebugPanel {
                 ${this.open ? "" : "hidden"}
             >
                 ${this.renderHeader(problemCount)}
-                ${this.renderTabs(validationProblems, requestProblems)}
+                ${this.renderTabs(diagnosticProblems, validationProblems, requestProblems)}
                 <main class="content">
                     ${this.renderOverview()}
+                    ${this.renderDiagnostics()}
                     ${this.renderSchema()}
                     ${this.renderValidation()}
                     ${this.renderRequests()}
@@ -287,7 +304,12 @@ class BrowserSdkDebugPanel implements SdkDebugPanel {
     }
 
     private renderHeader(problemCount: number): string {
-        const health = problemCount > 0 || this.connection.status === "failed" ? `문제 ${problemCount}` : "정상";
+        const health =
+            problemCount > 0 || this.connection.status === "failed"
+                ? `문제 ${problemCount}`
+                : this.connection.status === "connecting"
+                  ? "연결 확인 중"
+                  : "관찰 문제 없음";
         return `<header>
             <div class="brand">
                 <span class="brand-mark">${launcherIcon}</span>
@@ -298,9 +320,14 @@ class BrowserSdkDebugPanel implements SdkDebugPanel {
         </header>`;
     }
 
-    private renderTabs(validationProblems: number, requestProblems: number): string {
+    private renderTabs(
+        diagnosticProblems: number,
+        validationProblems: number,
+        requestProblems: number
+    ): string {
         return `<nav class="tabs" role="tablist" aria-label="SDK 디버그 메뉴">
             ${renderTab("overview", "개요", 0, this.activeTab)}
+            ${renderTab("diagnostics", "진단", diagnosticProblems, this.activeTab)}
             ${renderTab("schema", "스키마", 0, this.activeTab)}
             ${renderTab("validation", "검증", validationProblems, this.activeTab)}
             ${renderTab("requests", "요청", requestProblems, this.activeTab)}
@@ -328,6 +355,7 @@ class BrowserSdkDebugPanel implements SdkDebugPanel {
                 <strong>${escapeHtml(statusLabel)}</strong>
                 ${this.connection.status === "failed" ? `<code class="connection-error">${escapeHtml(this.connection.message)}</code>` : ""}
             </div>
+            <p class="observation-scope">${escapeHtml(observationScope(meta))}</p>
             <div class="metric-grid">
                 ${renderMetric("이벤트", meta?.events.length ?? 0, "등록")}
                 ${renderMetric("검증", this.validations.filter((record) => record.status === "passed").length, "통과")}
@@ -349,9 +377,61 @@ class BrowserSdkDebugPanel implements SdkDebugPanel {
                     ${renderDetail("스키마 버전", meta?.schemaVersion ?? "—", "code")}
                     ${renderDetail("리비전", meta ? String(meta.revision) : "—")}
                     ${renderDetail("등록 이벤트", meta ? String(meta.events.length) : "—")}
+                    ${renderDetail("개발자 진단", meta ? "소스 + 런타임" : "—")}
                     ${renderDetail("로드 시각", this.connection.connectedAt ? formatTime(this.connection.connectedAt) : "—")}
                     ${renderDetail("Schema URL", meta?.schemaUrl ?? "—", "wide code")}
                 </dl>
+            </section>
+        </section>`;
+    }
+
+    private renderDiagnostics(): string {
+        const meta = this.connection.meta;
+        const events = meta?.events ?? [];
+        const registered = new Set(events.map((event) => event.eventName));
+        const sourceManifest = meta?.sourceManifest.manifest;
+        const unregistered = sourceManifest
+            ? Object.entries(sourceManifest.events).filter(
+                  ([eventName]) => !registered.has(eventName) && !sourceManifest.externalEvents.includes(eventName)
+              )
+            : [];
+        const referencedCount = sourceManifest
+            ? events.filter((event) => (sourceManifest.events[event.eventName]?.length ?? 0) > 0).length
+            : 0;
+        const observedCount = events.filter((event) => this.runtimeStatus(event.eventName) !== "unobserved").length;
+        const eventRows = events.length
+            ? events
+                  .map((event) =>
+                      renderDiagnosticEvent(event, meta?.sourceManifest, this.runtimeStatus(event.eventName))
+                  )
+                  .join("")
+            : renderEmpty("진단할 이벤트 없음");
+        const unregisteredRows = unregistered.length
+            ? `<section class="section-card diagnostic-problems">
+                <div class="section-title padded"><h3>Tracking Plan 미등록 호출</h3><span>이름 수정 또는 이벤트 등록</span></div>
+                <div class="diagnostic-list">${unregistered
+                    .map(([eventName, references]) => renderUnregisteredSourceEvent(eventName, references))
+                    .join("")}</div>
+            </section>`
+            : "";
+
+        return `<section
+            class="tab-panel"
+            id="loopad-tab-diagnostics"
+            role="tabpanel"
+            aria-labelledby="loopad-tab-button-diagnostics"
+            ${this.activeTab === "diagnostics" ? "" : "hidden"}
+        >
+            <div class="summary-strip">
+                <span><strong>${events.length}</strong> 등록</span>
+                <span><strong>${referencedCount}</strong> 소스 참조</span>
+                <span><strong>${observedCount}</strong> 현재 세션 관찰</span>
+            </div>
+            ${renderManifestNotice(meta?.sourceManifest)}
+            ${unregisteredRows}
+            <section class="section-card flush diagnostic-card">
+                <div class="section-title padded"><h3>이벤트 구현 상태</h3><span>정적 참조 · 런타임 결과</span></div>
+                <div class="diagnostic-list">${eventRows}</div>
             </section>
         </section>`;
     }
@@ -482,6 +562,26 @@ class BrowserSdkDebugPanel implements SdkDebugPanel {
         this.recordSequence += 1;
         return `local-${this.recordSequence}`;
     }
+
+    private diagnosticProblemCount(): number {
+        const meta = this.connection.meta;
+        const manifest = meta?.sourceManifest.manifest;
+        if (!meta || !manifest) return meta?.sourceManifest.status === "failed" ? 1 : 0;
+
+        const registered = new Set(meta.events.map((event) => event.eventName));
+        return Object.keys(manifest.events).filter(
+            (eventName) => !registered.has(eventName) && !manifest.externalEvents.includes(eventName)
+        ).length;
+    }
+
+    private runtimeStatus(eventName: string): EventRuntimeStatus {
+        const request = this.requests.find((record) => record.eventName === eventName);
+        if (request) return request.status;
+        const validation = this.validations.find((record) => record.eventName === eventName);
+        if (validation?.status === "blocked") return "blocked";
+        if (validation?.status === "passed") return "called";
+        return "unobserved";
+    }
 }
 
 function renderTab(tab: DebugTab, label: string, problemCount: number, activeTab: DebugTab): string {
@@ -504,6 +604,127 @@ function renderMetric(label: string, value: number, caption: string): string {
 
 function renderDetail(label: string, value: string, className = ""): string {
     return `<div class="detail ${className}"><dt>${escapeHtml(label)}</dt><dd title="${escapeHtml(value)}">${escapeHtml(value)}</dd></div>`;
+}
+
+function observationScope(meta: SdkDebugConnectionMeta | undefined): string {
+    if (meta?.sourceManifest.status === "loaded") {
+        return "배포물의 소스 참조와 현재 페이지에서 관찰한 검증·요청을 함께 표시합니다. 미관찰은 구현 누락을 의미하지 않습니다.";
+    }
+    return "현재 페이지에서 SDK가 관찰한 연결·검증·요청만 표시합니다. 미관찰은 구현 누락을 의미하지 않습니다.";
+}
+
+function renderManifestNotice(state: SdkDebugSourceManifestState | undefined): string {
+    if (!state || state.status === "loaded") return "";
+    const className = state.status === "failed" ? "failed" : "neutral";
+    return `<div class="manifest-notice ${className}">
+        <strong>${state.status === "failed" ? "Source manifest 오류" : "런타임 진단"}</strong>
+        <span>${escapeHtml(state.message)}</span>
+    </div>`;
+}
+
+function renderDiagnosticEvent(
+    event: SdkDebugEventSchema,
+    sourceState: SdkDebugSourceManifestState | undefined,
+    runtimeStatus: EventRuntimeStatus
+): string {
+    const manifest = sourceState?.manifest;
+    const references = manifest?.events[event.eventName] ?? [];
+    const external = manifest?.externalEvents.includes(event.eventName) ?? false;
+    const source = diagnosticSource(sourceState, references, external);
+    const suggestion =
+        sourceState?.status === "loaded" && references.length === 0 && !external
+            ? `<div class="code-suggestion"><span>추가 예시</span><code>${escapeHtml(implementationSnippet(event))}</code></div>`
+            : "";
+
+    return `<article class="diagnostic-event" data-event-name="${escapeHtml(event.eventName)}">
+        <div class="diagnostic-heading">
+            <strong>${escapeHtml(event.eventName)}</strong>
+            <span class="runtime-badge ${runtimeStatus}">${escapeHtml(runtimeStatusLabel(runtimeStatus))}</span>
+        </div>
+        <div class="diagnostic-source ${source.className}">
+            <span>${escapeHtml(source.label)}</span>
+            ${source.locations}
+        </div>
+        ${suggestion}
+    </article>`;
+}
+
+function diagnosticSource(
+    state: SdkDebugSourceManifestState | undefined,
+    references: readonly LoopAdSourceReference[],
+    external: boolean
+): { label: string; className: string; locations: string } {
+    if (state?.status !== "loaded") {
+        return { label: state?.message ?? "Source manifest 없음", className: "neutral", locations: "" };
+    }
+    if (external) {
+        return { label: "외부 생산자 이벤트", className: "external", locations: "" };
+    }
+    if (references.length === 0) {
+        return { label: "소스 참조를 찾지 못함", className: "missing", locations: "" };
+    }
+
+    const locations = references
+        .slice(0, 3)
+        .map(
+            (reference) =>
+                `<code class="source-location">${escapeHtml(reference.file)}:${reference.line} · ${escapeHtml(sourceReferenceKindLabel(reference.kind))}</code>`
+        )
+        .join("");
+    const remainder = references.length > 3 ? `<span>외 ${references.length - 3}곳</span>` : "";
+    return {
+        label: `소스 참조 ${references.length}곳`,
+        className: "referenced",
+        locations: `<div class="source-locations">${locations}${remainder}</div>`
+    };
+}
+
+function renderUnregisteredSourceEvent(
+    eventName: string,
+    references: readonly LoopAdSourceReference[]
+): string {
+    const locations = references
+        .slice(0, 3)
+        .map((reference) => `${reference.file}:${reference.line}`)
+        .join(", ");
+    return `<article class="diagnostic-event unregistered">
+        <div class="diagnostic-heading"><strong>${escapeHtml(eventName)}</strong><span class="runtime-badge failed">미등록</span></div>
+        <div class="diagnostic-source missing"><span>Tracking Plan에 등록하거나 이벤트명을 수정하세요.</span></div>
+        ${locations ? `<code class="source-location">${escapeHtml(locations)}</code>` : ""}
+    </article>`;
+}
+
+function implementationSnippet(event: SdkDebugEventSchema): string {
+    const required = new Set(event.propertiesSchema.required ?? []);
+    const properties = Object.entries(event.propertiesSchema.properties ?? {}).filter(([name]) =>
+        required.has(name)
+    );
+    if (properties.length === 0) return `sdk.track(${JSON.stringify(event.eventName)});`;
+
+    const fields = properties
+        .slice(0, 8)
+        .map(([name, schema]) => `  ${JSON.stringify(name)}: ${schemaPlaceholder(schema)}`);
+    if (properties.length > fields.length) fields.push("  // 나머지 필수 필드도 추가하세요.");
+    return `sdk.track(${JSON.stringify(event.eventName)}, {\n${fields.join(",\n")}\n});`;
+}
+
+function schemaPlaceholder(schema: SdkDebugSchema): string {
+    if (schema.type === "string") return '""';
+    if (schema.type === "number" || schema.type === "integer") return "0";
+    if (schema.type === "boolean") return "false";
+    if (schema.type === "array") return "[]";
+    return "{}";
+}
+
+function runtimeStatusLabel(status: EventRuntimeStatus): string {
+    if (status === "unobserved") return "현재 세션 미관찰";
+    if (status === "called") return "호출됨";
+    return requestStatusLabel(status);
+}
+
+function sourceReferenceKindLabel(kind: LoopAdSourceReference["kind"]): string {
+    if (kind === "call") return "호출";
+    return "DOM";
 }
 
 function renderValidationRecord(record: ValidationRecord): string {
@@ -675,7 +896,13 @@ function truncateDebugText(value: string): string {
 }
 
 function isDebugTab(value: string | undefined): value is DebugTab {
-    return value === "overview" || value === "schema" || value === "validation" || value === "requests";
+    return (
+        value === "overview" ||
+        value === "diagnostics" ||
+        value === "schema" ||
+        value === "validation" ||
+        value === "requests"
+    );
 }
 
 function loadPanelState(): { open: boolean; activeTab: DebugTab } {
@@ -763,7 +990,7 @@ const styles = `
     .icon-button { display: grid; place-items: center; width: 30px; height: 30px; border: 0; border-radius: 7px; color: #64748b; background: transparent; cursor: pointer; }
     .icon-button:hover { color: #e2e8f0; background: #1e293b; }
     .icon-button svg { width: 17px; height: 17px; }
-    .tabs { display: flex; height: 44px; padding: 0 14px; gap: 4px; border-bottom: 1px solid #1e293b; background: #0f172a80; }
+    .tabs { display: flex; height: 44px; padding: 0 14px; gap: 4px; overflow-x: auto; border-bottom: 1px solid #1e293b; background: #0f172a80; }
     .tab { position: relative; display: flex; align-items: center; gap: 7px; padding: 0 12px; border: 0; color: #64748b; background: transparent; font-weight: 600; cursor: pointer; }
     .tab:hover { color: #cbd5e1; }
     .tab.active { color: #f8fafc; }
@@ -785,6 +1012,7 @@ const styles = `
     .status-pill.failed { border-color: #b4530980; color: #fbbf24; background: #78350f55; }
     .status-pill.connecting { border-color: #475569; color: #94a3b8; background: #1e293b; }
     .metric-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 12px 0; }
+    .observation-scope { margin-top: 8px; color: #64748b; font-size: 9px; }
     .metric { min-width: 0; padding: 11px 12px; border: 1px solid #1e293b; border-radius: 10px; background: #11182780; }
     .metric > span { display: block; color: #64748b; font-size: 10px; }
     .metric strong { display: block; margin-top: 5px; color: #f8fafc; font: 700 18px/1 ui-monospace, SFMono-Regular, Menlo, monospace; }
@@ -814,6 +1042,31 @@ const styles = `
     .summary-strip strong { color: #e2e8f0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
     .summary-strip .privacy-note { margin-left: auto; color: #475569; }
     .summary-strip .problem-summary { color: #fbbf24; }
+    .summary-strip .diagnostic-mode { margin-left: auto; color: #475569; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .manifest-notice { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; padding: 9px 11px; border: 1px solid #334155; border-radius: 8px; color: #94a3b8; background: #11182780; }
+    .manifest-notice strong { flex: 0 0 auto; color: #cbd5e1; font-size: 10px; }
+    .manifest-notice span { font-size: 9px; }
+    .manifest-notice.failed { border-color: #92400e80; color: #fbbf24; background: #451a0326; }
+    .diagnostic-problems { border-color: #92400e80; }
+    .diagnostic-list { overflow: hidden; }
+    .diagnostic-event { padding: 11px 12px; border-top: 1px solid #1e293b; }
+    .diagnostic-event:first-child { border-top: 0; }
+    .diagnostic-event.unregistered { background: #451a031f; }
+    .diagnostic-heading { display: flex; align-items: center; gap: 8px; }
+    .diagnostic-heading strong { min-width: 0; overflow: hidden; color: #e2e8f0; font: 600 10px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace; text-overflow: ellipsis; white-space: nowrap; }
+    .runtime-badge { margin-left: auto; padding: 2px 6px; border-radius: 999px; color: #94a3b8; background: #1e293b; font-size: 8px; }
+    .runtime-badge.sent, .runtime-badge.called { color: #86efac; background: #14532d55; }
+    .runtime-badge.pending { color: #7dd3fc; background: #0c4a6e55; }
+    .runtime-badge.blocked, .runtime-badge.failed { color: #fbbf24; background: #78350f55; }
+    .diagnostic-source { margin-top: 6px; color: #64748b; font-size: 9px; }
+    .diagnostic-source.referenced { color: #7dd3fc; }
+    .diagnostic-source.external { color: #c4b5fd; }
+    .diagnostic-source.missing { color: #fbbf24; }
+    .source-locations { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+    .source-location { display: inline-block; padding: 3px 5px; border-radius: 4px; color: #94a3b8; background: #1e293b; font-size: 8px; }
+    .code-suggestion { margin-top: 8px; overflow: hidden; border: 1px solid #334155; border-radius: 6px; background: #02061780; }
+    .code-suggestion > span { display: block; padding: 4px 7px; border-bottom: 1px solid #334155; color: #64748b; font-size: 8px; }
+    .code-suggestion code { display: block; padding: 7px; overflow-x: auto; color: #cbd5e1; font: 9px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre; }
     .dot { width: 6px; height: 6px; border-radius: 999px; background: #64748b; }
     .dot.passed, .dot.sent { background: #22c55e; }
     .dot.blocked, .dot.failed { background: #f59e0b; }
@@ -920,6 +1173,7 @@ const styles = `
     .health-card strong { color: #1f1f1f; font-size: 12px; }
     .connection-error { min-width: 0; margin-left: auto; overflow: hidden; color: #a1260d; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
     .metric-grid { gap: 6px; margin: 8px 0; }
+    .observation-scope { margin-top: 6px; color: #808080; font-size: 10px; }
     .metric { padding: 8px 9px; border-color: #d4d4d4; border-radius: 3px; background: #fafafa; }
     .metric > span { color: #616161; font-size: 10px; }
     .metric strong { margin-top: 3px; color: #1f1f1f; font-size: 16px; }
@@ -943,6 +1197,26 @@ const styles = `
     .summary-strip strong { color: #1f1f1f; }
     .summary-strip .privacy-note { color: #808080; }
     .summary-strip .problem-summary { color: #a1260d; }
+    .summary-strip .diagnostic-mode { color: #808080; }
+    .manifest-notice { border-color: #d4d4d4; border-radius: 3px; color: #616161; background: #fafafa; }
+    .manifest-notice strong { color: #333333; }
+    .manifest-notice.failed { border-color: #e0a1a3; color: #a1260d; background: #fff7f7; }
+    .diagnostic-problems { border-color: #e0a1a3; }
+    .diagnostic-event { border-top-color: #eeeeee; }
+    .diagnostic-event.unregistered { background: #fff7f7; }
+    .diagnostic-heading strong { color: #1f1f1f; font-size: 11px; }
+    .runtime-badge { color: #616161; background: #eeeeee; }
+    .runtime-badge.sent, .runtime-badge.called { color: #2d662d; background: #f0fff0; }
+    .runtime-badge.pending { color: #0451a5; background: #f0f8ff; }
+    .runtime-badge.blocked, .runtime-badge.failed { color: #a1260d; background: #fde7e9; }
+    .diagnostic-source { color: #808080; font-size: 10px; }
+    .diagnostic-source.referenced { color: #0451a5; }
+    .diagnostic-source.external { color: #5f3dc4; }
+    .diagnostic-source.missing { color: #a1260d; }
+    .source-location { color: #616161; background: #eeeeee; }
+    .code-suggestion { border-color: #d4d4d4; border-radius: 3px; background: #fafafa; }
+    .code-suggestion > span { border-bottom-color: #d4d4d4; color: #808080; }
+    .code-suggestion code { color: #333333; }
     .dot { background: #808080; }
     .dot.passed, .dot.sent { background: #388a34; }
     .dot.blocked, .dot.failed { background: #d13438; }

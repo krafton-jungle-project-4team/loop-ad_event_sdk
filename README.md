@@ -158,9 +158,14 @@ cache합니다.
 
 `debug: true`: 콘솔 로그, 우측 하단 `LoopAd SDK` 버튼
 
+DevTools는 Tracking Plan, 배포물의 소스 참조, 현재 페이지에서 SDK가 관찰한 검증·요청을
+한 화면에 표시합니다. 별도 진단 모드는 없습니다. `debug: true`이면 소스와 런타임 결과를
+함께 확인합니다.
+
 | 탭 | 확인할 수 있는 정보 |
 |---|---|
 | 개요 | Connection, identity, project, Collector, schema version, revision |
+| 진단 | 등록 이벤트의 소스 참조 위치, 현재 세션 관찰·전송 상태, 미등록 이벤트 호출 |
 | 스키마 | 이벤트별 필드, 타입, 필수 여부 |
 | 검증 | 차단 이벤트, 수정 항목 |
 | 요청 | 최근 50개 전송 상태, HTTP status, 요청 크기 |
@@ -170,6 +175,38 @@ cache합니다.
 - UI 상태: `localStorage`
 - 기록 제외: event property 값, Collector payload, identity 값
 - 패널 제거: `destroy()`
+
+### 소스 매니페스트
+
+Vite 같은 빌드 도구는 애플리케이션 소스에서 정적인 이벤트 참조를 수집해 아래 형식의
+JSON 파일을 배포물에 포함하고, HTML에 위치를 선언할 수 있습니다.
+
+```html
+<meta name="loopad-source-manifest" content="/loopad-event-manifest.json" />
+```
+
+```json
+{
+  "version": 1,
+  "buildId": "2026-07-15T00:00:00.000Z",
+  "generatedAt": "2026-07-15T00:00:00.000Z",
+  "events": {
+    "page_view": [
+      { "file": "src/lib/loop-ad-sdk.ts", "line": 32, "column": 3, "kind": "call" }
+    ]
+  },
+  "externalEvents": ["redirect_click"]
+}
+```
+
+SDK는 `debug: true`일 때 이 파일을 same-origin으로 읽습니다. 파일이 없거나 읽지 못해도
+초기화와 이벤트 전송은 계속하며 런타임 결과만 표시합니다. 빌드 도구를 쓰지 않는 환경은
+`init({ sourceManifest })`로 같은 데이터를 직접 전달할 수 있습니다.
+
+소스 참조는 구현 후보를 알려주는 정적 분석 결과입니다. 동적 이벤트명은 찾지 못할 수 있고,
+소스에서 찾지 못한 이벤트가 곧 구현 누락이라는 뜻은 아닙니다. 현재 세션 미관찰도 해당
+사용자 흐름을 실행하지 않았다는 뜻일 수 있습니다. 반대로 Tracking Plan에 없는 리터럴
+이벤트 호출은 이름 수정 또는 이벤트 등록이 필요한 문제로 표시합니다.
 
 ## DOM event
 

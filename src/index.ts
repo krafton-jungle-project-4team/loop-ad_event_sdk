@@ -1,7 +1,19 @@
 import {
     createSdkDebugPanel,
-    type SdkDebugPanel
+    type SdkDebugPanel,
+    type SdkDebugSourceManifestState
 } from "./debug-panel";
+import {
+    LOOPAD_SOURCE_MANIFEST_META_NAME,
+    parseLoopAdSourceManifest,
+    type LoopAdSourceManifest
+} from "./source-manifest";
+
+export type {
+    LoopAdSourceManifest,
+    LoopAdSourceReference,
+    LoopAdSourceReferenceKind
+} from "./source-manifest";
 
 /**
  * Tracking Plan으로 검증할 JSON 안전 이벤트 속성 값입니다.
@@ -55,6 +67,7 @@ export interface InitOptions {
     autoTrackPageViews?: boolean | null;
     collectDomEvents?: boolean | null;
     context?: EventProperties | null;
+    sourceManifest?: LoopAdSourceManifest | null;
 }
 
 interface LoopAdEventPayload {
@@ -114,7 +127,7 @@ export async function init(options: InitOptions): Promise<LoopAdEventSdkClient> 
     failedDebugPanel?.destroy();
     failedDebugPanel = null;
 
-    const debugPanel = options.debug
+    let debugPanel = options.debug
         ? createSdkDebugPanel({
               sdkVersion: version,
               connectionUrl: typeof options.connectionUrl === "string" ? options.connectionUrl : "Invalid URL",
@@ -126,14 +139,18 @@ export async function init(options: InitOptions): Promise<LoopAdEventSdkClient> 
     try {
         const connectionUrl = requiredHttpUrl(options.connectionUrl, "connectionUrl");
         const connection = await loadConnection(connectionUrl);
-        debugPanel?.setConnection({
-            projectId: connection.projectId,
-            collectorUrl: connection.collectorUrl,
-            schemaUrl: connection.schemaUrl,
-            schemaVersion: connection.schemaVersion,
-            revision: connection.revision,
-            events: connection.events
-        });
+        if (debugPanel) {
+            const sourceManifest = await loadSourceManifestState(options);
+            debugPanel.setConnection({
+                projectId: connection.projectId,
+                collectorUrl: connection.collectorUrl,
+                schemaUrl: connection.schemaUrl,
+                schemaVersion: connection.schemaVersion,
+                revision: connection.revision,
+                events: connection.events,
+                sourceManifest
+            });
+        }
         return startRuntime(withConnectionInitOptions(options, connection), debugPanel);
     } catch (error) {
         if (debugPanel) {
@@ -750,6 +767,59 @@ function parseConnection(value: unknown): SdkConnection {
         cacheTtlSeconds,
         events
     };
+}
+
+async function loadSourceManifestState(options: InitOptions): Promise<SdkDebugSourceManifestState> {
+    try {
+        if (options.sourceManifest) {
+            return {
+                status: "loaded",
+                message: "초기화 옵션에서 source manifest를 불러왔습니다.",
+                manifest: parseLoopAdSourceManifest(options.sourceManifest)
+            };
+        }
+
+        const manifestUrl = sourceManifestUrl();
+        if (!manifestUrl) {
+            return {
+                status: "unavailable",
+                message: "Vite source manifest가 없습니다. 플러그인 설정을 확인하세요."
+            };
+        }
+        if (typeof fetch !== "function") {
+            return { status: "failed", message: "Source manifest를 가져올 fetch가 없습니다." };
+        }
+
+        const response = await fetch(manifestUrl, {
+            method: "GET",
+            credentials: "same-origin",
+            headers: { Accept: "application/json" }
+        });
+        if (!response.ok) {
+            return {
+                status: "failed",
+                message: `Source manifest 요청이 HTTP ${response.status}로 실패했습니다.`
+            };
+        }
+
+        return {
+            status: "loaded",
+            message: "배포물의 source manifest를 불러왔습니다.",
+            manifest: parseLoopAdSourceManifest(await response.json())
+        };
+    } catch (error) {
+        return {
+            status: "failed",
+            message: `Source manifest가 올바르지 않습니다: ${errorMessage(error)}`
+        };
+    }
+}
+
+function sourceManifestUrl(): string | null {
+    if (typeof document === "undefined" || typeof document.querySelector !== "function") return null;
+    const element = document.querySelector(`meta[name="${LOOPAD_SOURCE_MANIFEST_META_NAME}"]`);
+    const content = element?.getAttribute("content")?.trim();
+    return content || null;
 }
 
 function parseTrackingPlanEvent(value: unknown, index: number): TrackingPlanEvent {

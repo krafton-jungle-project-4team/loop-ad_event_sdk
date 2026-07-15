@@ -186,16 +186,20 @@ test("shows validation and delivery status in debug DevTools without property va
     globalThis.document = createDebugDocument();
     activeSdk = await start({ debug: true });
 
+    const host = document.body.children.find((element) => element.id === "loopad-sdk-devtools");
+    assert.ok(host);
+    assert.match(host.shadowRoot.innerHTML, /관찰 문제 없음/);
+    assert.match(host.shadowRoot.innerHTML, /미관찰은 구현 누락을 의미하지 않습니다/);
+
     activeSdk.track("<invalid-event>", { secret: "must-not-appear" });
     activeSdk.track("checkout_completed", validCheckout({ order_id: "private-order-id" }));
     await Promise.resolve();
     await Promise.resolve();
 
-    const host = document.body.children.find((element) => element.id === "loopad-sdk-devtools");
-    assert.ok(host);
     const html = host.shadowRoot.innerHTML;
     assert.match(html, /LoopAd SDK/);
     assert.match(html, /data-tab="overview"[^>]*>개요/);
+    assert.match(html, /data-tab="diagnostics"[^>]*>진단/);
     assert.match(html, /data-tab="schema"[^>]*>스키마/);
     assert.match(html, /data-tab="validation"[^>]*>검증/);
     assert.match(html, /data-tab="requests"[^>]*>요청/);
@@ -218,6 +222,61 @@ test("shows validation and delivery status in debug DevTools without property va
 
     activeSdk.destroy();
     assert.equal(document.body.children.length, 0);
+});
+
+test("combines a Vite source manifest with runtime event status in debug mode", async () => {
+    globalThis.document = createDebugDocument("/loopad-event-manifest.json");
+    connection.events.push({
+        eventName: "redirect_click",
+        propertiesSchema: { type: "object", properties: {}, required: [] }
+    });
+    const sourceManifest = {
+        version: 1,
+        buildId: "build-1",
+        generatedAt: "2026-07-15T00:00:00.000Z",
+        events: {
+            page_view: [
+                {
+                    file: "src/lib/loop-ad-sdk.ts",
+                    line: 312,
+                    column: 3,
+                    kind: "call"
+                }
+            ],
+            not_registered_source: [
+                {
+                    file: "src/App.tsx",
+                    line: 10,
+                    column: 5,
+                    kind: "call"
+                }
+            ]
+        },
+        externalEvents: ["redirect_click"]
+    };
+    const connectionFetch = globalThis.fetch;
+    let manifestRequest;
+    globalThis.fetch = async (url, options = {}) => {
+        if (String(url) === "/loopad-event-manifest.json") {
+            manifestRequest = options;
+            return jsonResponse(sourceManifest);
+        }
+        return connectionFetch(url, options);
+    };
+
+    activeSdk = await start({ debug: true });
+
+    const host = document.body.children.find((element) => element.id === "loopad-sdk-devtools");
+    assert.ok(host);
+    const html = host.shadowRoot.innerHTML;
+    assert.match(html, /소스 \+ 런타임/);
+    assert.match(html, /src\/lib\/loop-ad-sdk\.ts:312/);
+    assert.match(html, /소스 참조를 찾지 못함/);
+    assert.match(html, /sdk\.track\(&quot;checkout_completed&quot;/);
+    assert.match(html, /외부 생산자 이벤트/);
+    assert.match(html, /not_registered_source/);
+    assert.match(html, /Tracking Plan에 등록하거나 이벤트명을 수정하세요/);
+    assert.equal(manifestRequest.credentials, "same-origin");
 });
 
 test("keeps DevTools available when Connection initialization fails", async () => {
@@ -695,7 +754,7 @@ function createDocument() {
     };
 }
 
-function createDebugDocument() {
+function createDebugDocument(sourceManifestUrl = null) {
     const body = {
         children: [],
         appendChild(element) {
@@ -707,6 +766,10 @@ function createDebugDocument() {
     return {
         ...createDocument(),
         body,
+        querySelector(selector) {
+            if (selector !== 'meta[name="loopad-source-manifest"]' || !sourceManifestUrl) return null;
+            return { getAttribute: (name) => (name === "content" ? sourceManifestUrl : null) };
+        },
         createElement(tagName) {
             return new FakeDebugHost(tagName);
         }
