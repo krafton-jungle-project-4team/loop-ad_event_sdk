@@ -69,7 +69,7 @@ test("exports only the connection-based runtime API", async () => {
 
     assert.deepEqual(
         Object.keys(activeSdk).sort(),
-        ["clearIdentity", "destroy", "setIdentity", "track"].sort()
+        ["clearIdentity", "destroy", "setIdentity", "setPrivacyIdentity", "track"].sort()
     );
     await assert.rejects(
         init({ projectId: "project", writeKey: "key" }),
@@ -110,6 +110,95 @@ test("keeps the collector envelope schema separate from the tracking plan schema
     assert.equal(eventRequests.length, 1);
     assert.equal(eventRequests[0].body.schema_version, "hotel_rec_promo.v1");
     assert.notEqual(eventRequests[0].body.schema_version, connection.schemaVersion);
+});
+
+test("sends privacy-event.v2 only when explicitly configured", async () => {
+    activeSdk = await start({
+        debug: true,
+        identity: null,
+        privacy: {
+            collectorUrl: "https://collector.example/private/v2/events",
+            identity: {
+                subjectId:
+                    "sub_15d6d4bda1882ae636a857db0c4932223a8d321d8020374cf9edcbb71f5e2963",
+                sessionId: "privacy-session-1",
+                namespace: "hotel-customer",
+                keyVersion: "key-v1"
+            },
+            consent: {
+                status: "granted",
+                policyVersion: "privacy-policy.v1",
+                purposeIds: ["personalized_marketing"]
+            }
+        }
+    });
+
+    activeSdk.track("page_view");
+
+    assert.equal(eventRequests.length, 1);
+    assert.equal(eventRequests[0].url, "https://collector.example/private/v2/events");
+    assert.equal(eventRequests[0].body.envelope_version, "privacy-event.v2");
+    assert.equal(
+        eventRequests[0].body.subject_id,
+        "sub_15d6d4bda1882ae636a857db0c4932223a8d321d8020374cf9edcbb71f5e2963"
+    );
+    assert.equal(eventRequests[0].body.identity_namespace, "hotel-customer");
+    assert.equal(eventRequests[0].body.consent.policy_version, "privacy-policy.v1");
+    assert.equal("user_id" in eventRequests[0].body, false);
+    assert.equal("write_key" in eventRequests[0].body, false);
+    assert.equal("properties_json" in eventRequests[0].body, false);
+    assert.equal(eventRequests[0].body.properties.sdk.name, "loop-ad_event_sdk");
+});
+
+test("privacy mode rejects raw identity fields before sending", async () => {
+    activeSdk = await start({
+        debug: true,
+        identity: null,
+        privacy: {
+            collectorUrl: "https://collector.example/private/v2/events",
+            identity: {
+                subjectId:
+                    "sub_15d6d4bda1882ae636a857db0c4932223a8d321d8020374cf9edcbb71f5e2963",
+                sessionId: "privacy-session-1",
+                namespace: "hotel-customer",
+                keyVersion: "key-v1"
+            },
+            consent: {
+                status: "granted",
+                policyVersion: "privacy-policy.v1",
+                purposeIds: ["personalized_marketing"]
+            }
+        }
+    });
+
+    activeSdk.track("page_view", { profile: { email: "guest@example.com" } });
+    assert.equal(eventRequests.length, 0);
+    assert.match(JSON.stringify(warnings), /properties.profile.email/);
+});
+
+test("does not allow legacy and privacy identities in the same runtime", async () => {
+    await assert.rejects(
+        init(
+            baseOptions({
+                privacy: {
+                    collectorUrl: "https://collector.example/private/v2/events",
+                    identity: {
+                        subjectId:
+                            "sub_15d6d4bda1882ae636a857db0c4932223a8d321d8020374cf9edcbb71f5e2963",
+                        sessionId: "privacy-session-1",
+                        namespace: "hotel-customer",
+                        keyVersion: "key-v1"
+                    },
+                    consent: {
+                        status: "granted",
+                        policyVersion: "privacy-policy.v1",
+                        purposeIds: ["personalized_marketing"]
+                    }
+                }
+            })
+        ),
+        /cannot use identity and privacy.identity together/
+    );
 });
 
 test("preserves nested JSON types and separates envelope options", async () => {

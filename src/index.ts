@@ -47,6 +47,33 @@ export interface Identity {
 }
 
 /**
+ * 고객사 내부 Connector 또는 backend가 발급한 가명 식별자입니다.
+ *
+ * 브라우저 SDK는 원본 고객 ID나 HMAC 키를 받지 않습니다.
+ */
+export interface PrivacyIdentity {
+    subjectId: string;
+    sessionId: string;
+    namespace: string;
+    keyVersion: string;
+}
+
+export interface PrivacyConsent {
+    status: "granted";
+    policyVersion: string;
+    purposeIds: string[];
+}
+
+/**
+ * privacy-event.v2를 사용하는 명시적 opt-in 설정입니다.
+ */
+export interface PrivacyCollectionOptions {
+    collectorUrl: string;
+    identity?: PrivacyIdentity | null;
+    consent: PrivacyConsent;
+}
+
+/**
  * `track()`의 이벤트 envelope 옵션입니다. 이벤트 속성과 분리해서 전달합니다.
  */
 export interface TrackOptions {
@@ -63,6 +90,7 @@ export interface TrackOptions {
 export interface InitOptions {
     connectionUrl: string;
     identity?: Identity | null;
+    privacy?: PrivacyCollectionOptions | null;
     debug?: boolean | null;
     autoTrackPageViews?: boolean | null;
     collectDomEvents?: boolean | null;
@@ -83,6 +111,29 @@ interface LoopAdEventPayload {
     properties_json: string;
 }
 
+interface PrivacyEventPayload {
+    envelope_version: "privacy-event.v2";
+    project_id: string;
+    schema_version: string;
+    event_id: string;
+    event_name: string;
+    event_time: string;
+    source: "browser_sdk";
+    subject_id: string;
+    identity_namespace: string;
+    identity_key_version: string;
+    session_id: string;
+    consent: {
+        status: "granted";
+        policy_version: string;
+        purpose_ids: string[];
+    };
+    properties: EventProperties;
+}
+
+type EventPayload = LoopAdEventPayload | PrivacyEventPayload;
+type RuntimeIdentity = Identity | PrivacyIdentity;
+
 export interface LoopAdEventSdkClient {
     /**
      * 표준 이벤트나 custom event를 수집합니다.
@@ -98,6 +149,10 @@ export interface LoopAdEventSdkClient {
      * `page_view`로 1회 기록합니다.
      */
     setIdentity(identity: Identity, context?: EventProperties | null): void;
+    /**
+     * privacy mode에서 customer-side backend가 발급한 가명 identity를 설정합니다.
+     */
+    setPrivacyIdentity(identity: PrivacyIdentity, context?: EventProperties | null): void;
     /**
      * 로그아웃 시 identity를 비웁니다.
      *
@@ -131,7 +186,7 @@ export async function init(options: InitOptions): Promise<LoopAdEventSdkClient> 
         ? createSdkDebugPanel({
               sdkVersion: version,
               connectionUrl: typeof options.connectionUrl === "string" ? options.connectionUrl : "Invalid URL",
-              identityReady: options.identity != null
+              identityReady: options.identity != null || options.privacy?.identity != null
           })
         : null;
     debugPanel?.start();
@@ -191,6 +246,8 @@ class Runtime {
             this.track(eventName, properties, options),
         setIdentity: (identity: Identity, context?: EventProperties | null) =>
             this.setIdentity(identity, context),
+        setPrivacyIdentity: (identity: PrivacyIdentity, context?: EventProperties | null) =>
+            this.setPrivacyIdentity(identity, context),
         clearIdentity: () => this.clearIdentity(),
         destroy: () => this.destroy()
     });
@@ -274,6 +331,20 @@ class Runtime {
             ...this.config.identityContext,
             ...properties
         } as EventProperties;
+        if (this.config.collectionMode === "privacy") {
+            const forbiddenPath = findForbiddenPrivacyProperty(userProperties);
+            if (forbiddenPath) {
+                warn(this.config.debug, "LoopAdEventSDK privacy mode rejected a forbidden property.", {
+                    eventName: normalizedEventName,
+                    path: forbiddenPath
+                });
+                this.recordBlockedEvent(
+                    normalizedEventName,
+                    `Privacy mode rejected forbidden property '${forbiddenPath}'.`
+                );
+                return;
+            }
+        }
         const validationErrors = validateEventProperties(
             normalizedEventName,
             userProperties,
@@ -350,7 +421,37 @@ class Runtime {
     }
 
     /** 내부 draft를 ClickHouse 형태의 collector payload로 변환합니다. */
-    private payload(draft: EventDraft, identity: Identity): LoopAdEventPayload {
+    private payload(draft: EventDraft, identity: RuntimeIdentity): EventPayload {
+        if (this.config.collectionMode === "privacy") {
+            const privacyIdentity = requirePrivacyIdentity(identity);
+            const forbiddenPath = findForbiddenPrivacyProperty(draft.properties);
+            if (forbiddenPath) {
+                throw new Error(
+                    `LoopAdEventSDK privacy mode rejected forbidden property '${forbiddenPath}'.`
+                );
+            }
+            return {
+                envelope_version: PRIVACY_ENVELOPE_VERSION,
+                project_id: this.config.projectId,
+                schema_version: EVENT_ENVELOPE_SCHEMA_VERSION,
+                event_id: draft.eventId,
+                event_name: draft.eventName,
+                event_time: draft.eventTime,
+                source: SOURCE,
+                subject_id: privacyIdentity.subjectId,
+                identity_namespace: privacyIdentity.namespace,
+                identity_key_version: privacyIdentity.keyVersion,
+                session_id: privacyIdentity.sessionId,
+                consent: {
+                    status: "granted",
+                    policy_version: this.config.privacyConsent.policyVersion,
+                    purpose_ids: [...this.config.privacyConsent.purposeIds]
+                },
+                properties: draft.properties
+            };
+        }
+
+        const legacyIdentity = requireLegacyIdentity(identity);
         return {
             project_id: this.config.projectId,
             write_key: this.config.writeKey,
@@ -359,14 +460,14 @@ class Runtime {
             event_name: draft.eventName,
             event_time: draft.eventTime,
             source: SOURCE,
-            user_id: identity.userId,
-            session_id: identity.sessionId,
+            user_id: legacyIdentity.userId,
+            session_id: legacyIdentity.sessionId,
             properties_json: serialize(draft.properties)
         };
     }
 
     /** 설정된 Event Collector ingest endpoint로 이벤트 하나를 전송합니다. */
-    private send(payload: LoopAdEventPayload): void {
+    private send(payload: EventPayload): void {
         if (typeof fetch !== "function") {
             warn(this.config.debug, "LoopAdEventSDK cannot send events because fetch is unavailable.");
             this.debugPanel?.recordRequest({
@@ -453,8 +554,29 @@ class Runtime {
      * 필요하지 않습니다.
      */
     private setIdentity(identity: Identity, context?: EventProperties | null): void {
+        if (this.config.collectionMode !== "legacy") {
+            throw new Error("LoopAdEventSDK privacy mode requires setPrivacyIdentity().");
+        }
         const hadIdentity = this.config.identity !== null;
         this.config.identity = normalizeIdentity(identity);
+        this.config.identityContext = context ? copyPropertyObject(context) : {};
+        this.debugPanel?.setIdentityReady(true);
+
+        if (!hadIdentity && this.config.autoTrackPageViews) {
+            this.trackPageView();
+        }
+    }
+
+    /** privacy mode의 가명 identity를 저장합니다. */
+    private setPrivacyIdentity(
+        identity: PrivacyIdentity,
+        context?: EventProperties | null
+    ): void {
+        if (this.config.collectionMode !== "privacy") {
+            throw new Error("LoopAdEventSDK legacy mode requires setIdentity().");
+        }
+        const hadIdentity = this.config.identity !== null;
+        this.config.identity = normalizePrivacyIdentity(identity);
         this.config.identityContext = context ? copyPropertyObject(context) : {};
         this.debugPanel?.setIdentityReady(true);
 
@@ -610,7 +732,9 @@ class Runtime {
 interface DefaultInitOptions {
     projectId: string;
     writeKey: string;
-    identity: Identity | null;
+    identity: RuntimeIdentity | null;
+    collectionMode: "legacy" | "privacy";
+    privacyConsent: PrivacyConsent;
     debug: boolean;
     autoTrackPageViews: boolean;
     collectDomEvents: boolean;
@@ -633,6 +757,7 @@ const SDK_NAME = "loop-ad_event_sdk";
 const SOURCE = "browser_sdk";
 /** Tracking Plan 형식과 독립적으로 Collector가 검증하는 event envelope 계약입니다. */
 const EVENT_ENVELOPE_SCHEMA_VERSION = "hotel_rec_promo.v1";
+const PRIVACY_ENVELOPE_VERSION = "privacy-event.v2";
 const MAX_CONNECTION_CACHE_TTL_MS = 5 * 60 * 1000;
 const MAX_SCHEMA_DEPTH = 8;
 const MAX_SCHEMA_NODES = 100;
@@ -643,8 +768,33 @@ const DOM_EVENTS = ["click", "change", "submit"] as const;
 const TEXT_LIMIT_BYTES = 160;
 const RESERVED_PROPERTY_NAMES = new Set(["page_path", "page", "sdk", "element"]);
 const DANGEROUS_PROPERTY_NAMES = new Set(["__proto__", "prototype", "constructor"]);
+const FORBIDDEN_PRIVACY_PROPERTY_NAMES = new Set([
+    "userid",
+    "externaluserid",
+    "customerid",
+    "email",
+    "emailaddress",
+    "phone",
+    "phonenumber",
+    "mobile",
+    "mobilenumber",
+    "name",
+    "fullname",
+    "firstname",
+    "lastname",
+    "customername",
+    "address",
+    "postaladdress",
+    "birthdate",
+    "dateofbirth",
+    "password",
+    "cardnumber",
+    "accountnumber",
+    "residentregistrationnumber"
+]);
 const CREDIT_CARD_PATTERN = /^(?:(?:4[0-9]{12}(?:[0-9]{3})?)|(?:5[1-5][0-9]{14})|(?:6(?:011|5[0-9]{2})[0-9]{12})|(?:3[47][0-9]{13})|(?:3(?:0[0-5]|[68][0-9])[0-9]{11})|(?:(?:2131|1800|35[0-9]{3})[0-9]{11}))$/;
 const SSN_PATTERN = /^\d{3}-?\d{2}-?\d{4}$/;
+const CONTRACT_ID_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 
 let active: Runtime | null = null;
 let failedDebugPanel: SdkDebugPanel | null = null;
@@ -685,12 +835,18 @@ function withConnectionInitOptions(
         projectId: connection.projectId,
         writeKey: connection.writeKey,
         identity: identityFromInit(options),
+        collectionMode: options.privacy ? "privacy" : "legacy",
+        privacyConsent: options.privacy
+            ? normalizePrivacyConsent(options.privacy.consent)
+            : emptyPrivacyConsent(),
         debug: options.debug ?? false,
         autoTrackPageViews: options.autoTrackPageViews ?? true,
         collectDomEvents: options.collectDomEvents ?? true,
         baseContext: options.context ? copyPropertyObject(options.context) : {},
         identityContext: {},
-        collectorUrl: connection.collectorUrl,
+        collectorUrl: options.privacy
+            ? requiredHttpUrl(options.privacy.collectorUrl, "privacy.collectorUrl")
+            : connection.collectorUrl,
         trackingPlanSchemaVersion: connection.schemaVersion,
         revision: connection.revision,
         events: new Map(connection.events.map((event) => [event.eventName, event]))
@@ -1066,7 +1222,13 @@ function requiredHttpUrl(value: unknown, path: string): string {
 }
 
 /** 시작 시 전달된 identity를 해석하고, 로그인 전이면 `null`을 반환합니다. */
-function identityFromInit(options: InitOptions): Identity | null {
+function identityFromInit(options: InitOptions): RuntimeIdentity | null {
+    if (options.privacy && options.identity) {
+        throw new Error("LoopAdEventSDK cannot use identity and privacy.identity together.");
+    }
+    if (options.privacy?.identity) {
+        return normalizePrivacyIdentity(options.privacy.identity);
+    }
     if (options.identity) {
         return normalizeIdentity(options.identity);
     }
@@ -1086,6 +1248,115 @@ function normalizeIdentity(identity: Identity): Identity {
     }
 
     return { userId, sessionId };
+}
+
+function normalizePrivacyIdentity(identity: PrivacyIdentity): PrivacyIdentity {
+    const subjectId = text(identity.subjectId);
+    const sessionId = text(identity.sessionId);
+    const namespace = text(identity.namespace);
+    const keyVersion = text(identity.keyVersion);
+
+    if (
+        !subjectId ||
+        !/^sub_[0-9a-f]{64}$/.test(subjectId) ||
+        !sessionId ||
+        !namespace ||
+        !keyVersion ||
+        !CONTRACT_ID_PATTERN.test(namespace) ||
+        !CONTRACT_ID_PATTERN.test(keyVersion)
+    ) {
+        throw new Error(
+            "LoopAdEventSDK privacy identity requires a valid subjectId, sessionId, namespace and keyVersion."
+        );
+    }
+    return { subjectId, sessionId, namespace, keyVersion };
+}
+
+function normalizePrivacyConsent(consent: PrivacyConsent): PrivacyConsent {
+    if (!consent || consent.status !== "granted") {
+        throw new Error("LoopAdEventSDK privacy mode requires granted consent.");
+    }
+    const policyVersion = text(consent.policyVersion);
+    const purposeIds = Array.from(
+        new Set((consent.purposeIds ?? []).map((value) => text(value)).filter(isText))
+    ).sort();
+    if (
+        !policyVersion ||
+        !CONTRACT_ID_PATTERN.test(policyVersion) ||
+        purposeIds.length === 0 ||
+        purposeIds.some((value) => !CONTRACT_ID_PATTERN.test(value))
+    ) {
+        throw new Error(
+            "LoopAdEventSDK privacy consent requires a policyVersion and purposeIds."
+        );
+    }
+    return { status: "granted", policyVersion, purposeIds };
+}
+
+function emptyPrivacyConsent(): PrivacyConsent {
+    return {
+        status: "granted",
+        policyVersion: "unused",
+        purposeIds: ["unused"]
+    };
+}
+
+function requirePrivacyIdentity(identity: RuntimeIdentity): PrivacyIdentity {
+    if (!("subjectId" in identity)) {
+        throw new Error("LoopAdEventSDK privacy mode received a legacy identity.");
+    }
+    return identity;
+}
+
+function requireLegacyIdentity(identity: RuntimeIdentity): Identity {
+    if (!("userId" in identity)) {
+        throw new Error("LoopAdEventSDK legacy mode received a privacy identity.");
+    }
+    return identity;
+}
+
+function findForbiddenPrivacyProperty(
+    value: EventPropertyValue | EventProperties,
+    path = "properties"
+): string | null {
+    if (Array.isArray(value)) {
+        for (let index = 0; index < value.length; index += 1) {
+            const child = value[index];
+            if (child === undefined) {
+                continue;
+            }
+            const found = findForbiddenPrivacyProperty(child, `${path}[${index}]`);
+            if (found) {
+                return found;
+            }
+        }
+        return null;
+    }
+    if (!isPlainObject(value)) {
+        return null;
+    }
+    for (const [key, child] of Object.entries(value)) {
+        const childPath = `${path}.${key}`;
+        if (
+            childPath !== "properties.sdk.name" &&
+            FORBIDDEN_PRIVACY_PROPERTY_NAMES.has(normalizePrivacyPropertyName(key))
+        ) {
+            return childPath;
+        }
+        const found = findForbiddenPrivacyProperty(child as EventPropertyValue, childPath);
+        if (found) {
+            return found;
+        }
+    }
+    return null;
+}
+
+function normalizePrivacyPropertyName(value: string): string {
+    return value.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function isText(value: string | null | undefined): value is string {
+    return value !== null && value !== undefined;
 }
 
 function copyPropertyObject(value: unknown): EventProperties {
