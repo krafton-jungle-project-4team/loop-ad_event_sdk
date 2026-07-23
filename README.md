@@ -63,6 +63,38 @@ queue에 보관하지 않고 버립니다.
 sdk.clearIdentity();
 ```
 
+## Experimental privacy mode
+
+고객사 내부 backend 또는 Private Connector가 발급한 가명 `subjectId`만 브라우저에
+전달하는 opt-in 모드입니다. 브라우저에서 원본 고객 ID를 HMAC 처리하거나 비밀키를
+보관하지 않습니다. `privacy`를 생략하면 기존 v1 동작이 그대로 유지됩니다.
+
+```js
+const sdk = await init({
+  connectionUrl:
+    "https://dashboard.api.dev.loop-ad.org/api/public/v1/sdk/connections/public_sdk_key",
+  identity: null,
+  privacy: {
+    collectorUrl: "https://collector.example/private/v2/events",
+    identity: {
+      subjectId: subjectIssuedByCustomerBackend,
+      sessionId: currentSession.id,
+      namespace: "hotel-customer",
+      keyVersion: "key-v1"
+    },
+    consent: {
+      status: "granted",
+      policyVersion: "privacy-policy.v1",
+      purposeIds: ["personalized_marketing"]
+    }
+  }
+});
+```
+
+`user_id`, `external_user_id`, 이메일, 전화번호, 이름, 주소, 결제 식별자 계열 key가
+중첩 properties에 포함되면 전송 전에 거부합니다. 이는 방어 로직이며 고객사의 동의
+설계와 법률 검토를 대신하지 않습니다.
+
 ## 이벤트 전송
 
 두 번째 인자는 Tracking Plan으로 검증할 JSON 속성이고 세 번째 인자는 이벤트 envelope
@@ -96,6 +128,7 @@ sdk.track(
 |---|---|
 | `track(eventName, properties?, options?)` | 등록된 이벤트를 검증하고 전송합니다. |
 | `setIdentity(identity, context?)` | `{ userId, sessionId }`와 선택적인 공유 속성을 설정합니다. |
+| `setPrivacyIdentity(identity, context?)` | privacy mode에서 backend가 발급한 가명 identity를 설정합니다. |
 | `clearIdentity()` | identity와 identity context를 제거합니다. |
 | `destroy()` | DOM 및 History API listener를 제거합니다. |
 
@@ -105,6 +138,7 @@ sdk.track(
 |---|---:|---|---|
 | `connectionUrl` | yes | 없음 | Dashboard 공개 SDK connection URL |
 | `identity` | no | `null` | `{ userId, sessionId }` |
+| `privacy` | no | 없음 | 명시적 privacy-event.v2 collector, 가명 identity와 동의 증적 |
 | `context` | no | `{}` | 모든 이벤트 속성과 병합할 범용 JSON 객체 |
 | `debug` | no | `false` | 콘솔 로그와 우측 하단 SDK DevTools 활성화 |
 | `autoTrackPageViews` | no | `true` | 최초 identity 설정과 SPA URL 변경 시 `page_view` 전송 |
